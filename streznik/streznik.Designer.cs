@@ -41,7 +41,7 @@
             | System.Windows.Forms.AnchorStyles.Right)));
             this.chat.Location = new System.Drawing.Point(3, 5);
             this.chat.Name = "chat";
-            this.chat.Size = new System.Drawing.Size(672, 22);
+            this.chat.Size = new System.Drawing.Size(672, 20);
             this.chat.TabIndex = 0;
             this.chat.KeyPress += new System.Windows.Forms.KeyPressEventHandler(this.chat_KeyPress);
             // 
@@ -51,6 +51,7 @@
             | System.Windows.Forms.AnchorStyles.Left) 
             | System.Windows.Forms.AnchorStyles.Right)));
             this.log.CausesValidation = false;
+            this.log.Font = new System.Drawing.Font("Courier New", 8.25F, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point, ((byte)(238)));
             this.log.HideSelection = false;
             this.log.Location = new System.Drawing.Point(3, 3);
             this.log.Multiline = true;
@@ -143,7 +144,7 @@
             this.stats_lab.AutoSize = true;
             this.stats_lab.Location = new System.Drawing.Point(3, 3);
             this.stats_lab.Name = "stats_lab";
-            this.stats_lab.Size = new System.Drawing.Size(53, 17);
+            this.stats_lab.Size = new System.Drawing.Size(42, 13);
             this.stats_lab.TabIndex = 3;
             this.stats_lab.Text = "STATS";
             // 
@@ -152,7 +153,7 @@
             this.connected_lab.AutoSize = true;
             this.connected_lab.Location = new System.Drawing.Point(0, 0);
             this.connected_lab.Name = "connected_lab";
-            this.connected_lab.Size = new System.Drawing.Size(94, 17);
+            this.connected_lab.Size = new System.Drawing.Size(74, 13);
             this.connected_lab.TabIndex = 4;
             this.connected_lab.Text = "CONNECTED";
             // 
@@ -181,7 +182,7 @@
             this.log_label.AutoSize = true;
             this.log_label.Location = new System.Drawing.Point(3, 3);
             this.log_label.Name = "log_label";
-            this.log_label.Size = new System.Drawing.Size(38, 17);
+            this.log_label.Size = new System.Drawing.Size(29, 13);
             this.log_label.TabIndex = 2;
             this.log_label.Text = "LOG";
             // 
