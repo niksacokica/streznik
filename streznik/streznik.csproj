@@ -46,16 +46,16 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
-    <Compile Include="zgled.cs">
+    <Compile Include="streznik.cs">
       <SubType>Form</SubType>
     </Compile>
-    <Compile Include="zgled.Designer.cs">
-      <DependentUpon>zgled.cs</DependentUpon>
+    <Compile Include="streznik.Designer.cs">
+      <DependentUpon>streznik.cs</DependentUpon>
     </Compile>
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
-    <EmbeddedResource Include="zgled.resx">
-      <DependentUpon>zgled.cs</DependentUpon>
+    <EmbeddedResource Include="streznik.resx">
+      <DependentUpon>streznik.cs</DependentUpon>
     </EmbeddedResource>
     <EmbeddedResource Include="Properties\Resources.resx">
       <Generator>ResXFileCodeGenerator</Generator>

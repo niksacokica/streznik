@@ -1,16 +1,14 @@
 ﻿using System;
 using System.Windows.Forms;
 
-namespace streznik
-{
-    static class Program
-    {
+namespace streznik{
+    static class Program{
+
         [STAThread]
-        static void Main()
-        {
+        static void Main(){
             Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            Application.Run(new Strežnik());
+            Application.SetCompatibleTextRenderingDefault( false );
+            Application.Run( new Strežnik() );
         }
     }
 }
