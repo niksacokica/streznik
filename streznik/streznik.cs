@@ -1,18 +1,17 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace streznik{
     public partial class Strežnik : Form{
         private static string ip = "127.0.0.1";
         private static int port = 1507;
-        private TcpListener listener = new TcpListener(IPAddress.Parse(ip), port);
-        private CancellationTokenSource cancel = new CancellationTokenSource();
+        private TcpListener listener = new TcpListener( IPAddress.Parse(ip), port );
+        private static List<TcpClient> allClients = new List<TcpClient>();
         private int msg_size = 1024;
 
         private bool sOn = false;
@@ -20,31 +19,24 @@ namespace streznik{
         private static int pad = 25;
         private string info = "[INFO]".PadLeft( pad, ' ' );
         private string error = "[ERROR]".PadLeft(pad, ' ');
+        private string alert = "[ALERT]".PadLeft(pad, ' ');
 
-        delegate void SetTextCallback( string text );
+        delegate void SetTextCallback( TextBox type, string text );
 
         public Strežnik(){
-            cancel.Token.Register(() => listener.Stop());
             InitializeComponent();
         }
 
-        private void setTextLog( string txt ){
-            if( log.InvokeRequired )
-                this.Invoke( new SetTextCallback( setTextLog ), new object[] { txt } );
+        private void setText( TextBox type, string txt ){
+            if( type.InvokeRequired )
+                this.Invoke( new SetTextCallback( setText ), new object[] { type, txt } );
             else
-                log.AppendText( txt + "\r\n" );
+                type.AppendText( txt + "\r\n" );
         }
 
-        private void setTextConnected( string txt ){
-            if( connected.InvokeRequired)
-                this.Invoke( new SetTextCallback( setTextConnected ), new object[] { txt } );
-            else
-                connected.AppendText( txt + "\r\n" );
-        }
-
-        private void removeTextConnected( string txt ){
+        private void removeText( TextBox type, string txt ){
             if( connected.InvokeRequired )
-                this.Invoke( new SetTextCallback( removeTextConnected ), new object[] { txt } );
+                this.Invoke( new SetTextCallback( removeText ), new object[] { type, txt } );
             else{
                 string[] tmp = connected.Text.Split( '\n' );
                 for( int i = 0; i < tmp.Length; i++ ){
@@ -66,63 +58,69 @@ namespace streznik{
             }
         }
 
-        private void closingInvoker( string dummy ){
-            if( InvokeRequired ){
-                this.Invoke( new Action<string>( closingInvoker ), new object[] { dummy } );
+        private void onClientConnect( TcpClient client, string cn ){
+            allClients.Add(client);
+            setText( log, cn + " has connected." + info );
+            setText( connected, cn );
+        }
+
+        private void onClientDisconnect( TcpClient client, string cn ){
+            allClients.Remove(client);
+            setText( log, cn + " has disconnected." + info );
+            removeText( connected, cn );
+        }
+
+        private void callback( IAsyncResult iar ){
+            TcpClient client = listener.EndAcceptTcpClient( iar );
+            if( !sOn ){
+                listener.Stop();
                 return;
             }
 
-            listener.Stop();
-        }
-
-        public void callback( TcpClient client ){
+            listener.BeginAcceptTcpClient( new AsyncCallback( callback ), null );
             NetworkStream ns = client.GetStream();
-
             string cn = client.Client.RemoteEndPoint.ToString();
 
-            setTextLog( cn + " has connected." + info );
-            setTextConnected( cn );
+            onClientConnect( client, cn );
 
             while( sOn ){
-                if ( !IsConnected( client.Client ) )
-                    break;
-
                 byte[] buffer = new byte[msg_size];
                 string read = "";
                 try{
                     read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
+                    ns.Close();
                 }catch{
-                    if( !IsConnected( client.Client ) )
+                    if (!client.Client.Connected)
                         break;
-                    else
-                        setTextLog( "Couldn't read data! Remote host disconnected!" + error );
+                    setText( log, "Couldn't read data! Remote host disconnected!" + alert );
                 }
 
-                if( !string.IsNullOrEmpty( read ) )
-                    setTextLog( read + ( "[" + cn + "]" ).PadLeft( pad, ' ' ) );
+                if( !string.IsNullOrEmpty( read ) && sOn )
+                    setText( log, read + ( "[" + cn + "]" ).PadLeft( pad, ' ' ) );
             }
 
-            setTextLog( cn + " has disconnected." + info );
-            removeTextConnected( cn );
+            onClientDisconnect( client, cn );
         }
 
         private async void serverToggle( bool on ){
-            if ( !on ){
+            if( !on ){
                 listener.Start();
+                listener.BeginAcceptTcpClient( new AsyncCallback( callback ), null);
                 sOn = !on;
             }else{
-                sOn = !on;
-                cancel.Cancel();
-            }
+                foreach( TcpClient cl in allClients ){
+                    NetworkStream cls = cl.GetStream();
 
-            try{
-                while( sOn ){
-                    //using ( cancel.Register( () => listener.Stop() ) )
-                    TcpClient newclient = await Task.Run( () => listener.AcceptTcpClientAsync(), cancel.Token );
-                    Task.Run( () => callback(newclient) );
+                    string msg = "Hello!";
+
+                    byte[] send = Encoding.UTF8.GetBytes(msg.ToCharArray(), 0, msg.Length);
+                    cls.Write(send, 0, send.Length);
+                    cls.Close();
                 }
-            }finally{
-                closingInvoker( "" );
+                sOn = !on;
+                TcpClient stop = new TcpClient( ip, port );
+                stop.GetStream().Close();
+                stop.Close();
             }
         }
 
@@ -148,11 +146,10 @@ namespace streznik{
         private string handleCommand(string txt){
             string[] cmd = txt.Split( ' ' );
             string help = "".PadLeft( pad, ' ' );
-            string alert = "[ALERT]".PadLeft( pad, ' ' );
 
-            switch ( cmd[0] ){
+            switch( cmd[0] ){
                 case "exit":
-                    System.Windows.Forms.Timer cls = new System.Windows.Forms.Timer();
+                    Timer cls = new Timer();
                     cls.Tick += delegate{
                         this.Close();
                     };
@@ -199,7 +196,11 @@ namespace streznik{
                 case "toggle":
                     return sOn ? handleCommand( "stop" ) : handleCommand( "start" );
                 case "port":
-                    try{
+                    if( sOn )
+                        setText( log, handleCommand( "stop" ) );
+
+                    try
+                    {
                         int num = Int32.Parse( cmd[1] );
 
                         if( num < 65353 && num > 0 )
