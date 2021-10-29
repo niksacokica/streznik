@@ -64,8 +64,24 @@ namespace streznik{
             setText( connected, cn );
         }
 
+        private void onClientConnected( TcpClient client, NetworkStream ns, string cn ){
+            byte[] buffer = new byte[msg_size];
+            string read = "";
+            try{
+                read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
+                ns.Close();
+            }catch{
+                if( !client.Client.Connected )
+                    return;
+                setText(log, "Couldn't read data! Remote host disconnected!" + alert);
+            }
+            
+            if( !string.IsNullOrEmpty( read ) )
+                setText( log, read + ( "[" + cn + "]" ).PadLeft( pad, ' ' ) );
+        }
+
         private void onClientDisconnect( TcpClient client, string cn ){
-            allClients.Remove(client);
+            allClients.Remove( client );
             setText( log, cn + " has disconnected." + info );
             removeText( connected, cn );
         }
@@ -82,23 +98,9 @@ namespace streznik{
             string cn = client.Client.RemoteEndPoint.ToString();
 
             onClientConnect( client, cn );
-
             while( sOn ){
-                byte[] buffer = new byte[msg_size];
-                string read = "";
-                try{
-                    read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
-                    ns.Close();
-                }catch{
-                    if (!client.Client.Connected)
-                        break;
-                    setText( log, "Couldn't read data! Remote host disconnected!" + alert );
-                }
-
-                if( !string.IsNullOrEmpty( read ) && sOn )
-                    setText( log, read + ( "[" + cn + "]" ).PadLeft( pad, ' ' ) );
+                onClientConnected(client, ns, cn);
             }
-
             onClientDisconnect( client, cn );
         }
 
@@ -111,7 +113,7 @@ namespace streznik{
                 foreach( TcpClient cl in allClients ){
                     NetworkStream cls = cl.GetStream();
 
-                    string msg = "Hello!";
+                    string msg = "silent disconnect";
 
                     byte[] send = Encoding.UTF8.GetBytes(msg.ToCharArray(), 0, msg.Length);
                     cls.Write(send, 0, send.Length);
