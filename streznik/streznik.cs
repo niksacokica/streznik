@@ -4,27 +4,55 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace streznik{
-    public partial class Strežnik : Form{
-        private static string ip = "127.0.0.1";
-        private static int port = 1507;
-        private TcpListener listener = new TcpListener( IPAddress.Parse(ip), port );
+    public partial class Strežnik : Form {
+        private static Dictionary<string, string> statsD = new Dictionary<string, string>(){
+            { "IP", "127.0.0.1" },
+            { "PORT", "1507" },
+            { "MESSAGE SIZE", "1024" },
+            { "SERVER STATUS", "OFF" },
+            { "CONNECTED CLIENTS", "0" }
+        };
+
+        private TcpListener listener = new TcpListener( IPAddress.Parse( statsD["IP"] ), Int32.Parse( statsD["PORT"] ) );
         private static List<TcpClient> allClients = new List<TcpClient>();
-        private int msg_size = 1024;
 
         private bool sOn = false;
 
         private static int pad = 25;
         private string info = "[INFO]".PadLeft( pad, ' ' );
-        private string error = "[ERROR]".PadLeft(pad, ' ');
-        private string alert = "[ALERT]".PadLeft(pad, ' ');
+        private string error = "[ERROR]".PadLeft (pad, ' ' );
+        private string alert = "[ALERT]".PadLeft( pad, ' ' );
 
-        delegate void SetTextCallback( TextBox type, string text );
+        delegate void SetTextCallback(TextBox type, string text);
 
         public Strežnik(){
             InitializeComponent();
+
+            setStats( stats, "" );
+
+            Timer cc = new Timer();
+            cc.Tick += delegate {
+                foreach (TcpClient cl in allClients.ToList() ){
+                    if (!IsConnected(cl.Client))
+                        try{ onClientDisconnect(cl, cl.Client.RemoteEndPoint.ToString()); }catch{}
+                }
+            };
+            cc.Interval = 1000;
+            cc.Start();
+        }
+
+        private void setStats(TextBox type, string txt){
+            if( type.InvokeRequired )
+                this.Invoke( new SetTextCallback( setStats ), new object[] { type, txt });
+            else{
+                type.Text = "";
+                foreach( KeyValuePair<string, string> stat in statsD )
+                    type.AppendText( stat.Key + ":" + stat.Value.PadLeft( 15, ' ' ) + "\r\n" );
+            }
         }
 
         private void setText( TextBox type, string txt ){
@@ -60,30 +88,38 @@ namespace streznik{
 
         private void onClientConnect( TcpClient client, string cn ){
             allClients.Add(client);
+
             setText( log, cn + " has connected." + info );
             setText( connected, cn );
+
+            statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
+            setStats( stats, "" );
         }
 
         private void onClientConnected( TcpClient client, NetworkStream ns, string cn ){
-            byte[] buffer = new byte[msg_size];
-            string read = "";
+            byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
+            string read;
             try{
                 read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
                 ns.Close();
             }catch{
-                if( !client.Client.Connected )
-                    return;
-                setText(log, "Couldn't read data! Remote host disconnected!" + alert);
+                setText( log, "Couldn't read data! Remote host disconnected!" + alert );
+
+                return;
             }
             
             if( !string.IsNullOrEmpty( read ) )
-                setText( log, read + ( "[" + cn + "]" ).PadLeft( pad, ' ' ) );
+                Task.Run( async () => handleMessage( read ) );
         }
 
         private void onClientDisconnect( TcpClient client, string cn ){
             allClients.Remove( client );
+
             setText( log, cn + " has disconnected." + info );
             removeText( connected, cn );
+
+            statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1 ).ToString();
+            setStats( stats, "" );
         }
 
         private void callback( IAsyncResult iar ){
@@ -105,25 +141,35 @@ namespace streznik{
         }
 
         private async void serverToggle( bool on ){
-            if( !on ){
+            setText( log, ( on ? "Stopping server." : "Starting server." ) + info );
+
+            if ( !on ){
                 listener.Start();
                 listener.BeginAcceptTcpClient( new AsyncCallback( callback ), null);
                 sOn = !on;
-            }else{
-                foreach( TcpClient cl in allClients ){
-                    NetworkStream cls = cl.GetStream();
 
-                    string msg = "silent disconnect";
+                statsD["SERVER STATUS"] = "ON";
+            }
+            else{
+                foreach ( TcpClient cl in allClients.ToList() )
+                    sendToClient( cl, "SERVER sc disconnect" );
 
-                    byte[] send = Encoding.UTF8.GetBytes(msg.ToCharArray(), 0, msg.Length);
-                    cls.Write(send, 0, send.Length);
-                    cls.Close();
-                }
                 sOn = !on;
-                TcpClient stop = new TcpClient( ip, port );
+                TcpClient stop = new TcpClient( statsD["IP"], Int32.Parse( statsD["PORT"] ) );
                 stop.GetStream().Close();
                 stop.Close();
+
+                statsD["SERVER STATUS"] = "OFF";
             }
+
+            setStats(stats, "");
+        }
+
+        private void sendToClient( TcpClient cl, string msg ){
+            NetworkStream cls = cl.GetStream();
+
+            byte[] send = Encoding.UTF8.GetBytes( msg.ToCharArray(), 0, msg.Length );
+            cls.Write( send, 0, send.Length );
         }
 
         //tukaj dobimo text z chat boxa kdaj uporabnik pritisne enter
@@ -134,13 +180,11 @@ namespace streznik{
 
                 e.Handled = true;
 
+                log.AppendText( txt + "[SERVER(YOU)]".PadLeft( pad, ' ' ) + "\r\n" );
                 string ret = handleCommand( txt );
 
-                txt += "[SERVER(YOU)]".PadLeft( pad, ' ' );
-                if ( !string.IsNullOrEmpty( ret ) )
-                    txt += "\r\n" + ret ;
-
-                log.AppendText( txt + "\r\n" );
+                if( !string.IsNullOrEmpty( ret ) )
+                    log.AppendText( ret + "\r\n" );
             }
         }
 
@@ -150,6 +194,23 @@ namespace streznik{
             string help = "".PadLeft( pad, ' ' );
 
             switch( cmd[0] ){
+                case "disconnect":
+                    if( !sOn )
+                        return "Server is not on!" + alert;
+                    else if( cmd.Length < 3 || ( cmd[1] != "sc" && cmd[1] != "c" ) )
+                        return "Argument error!" + alert;
+
+                    foreach( TcpClient cl in allClients.ToList() ){
+                        if( string.Equals( cmd[2], cl.Client.RemoteEndPoint.ToString() ) ){
+                            string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
+
+                            sendToClient( cl, "SERVER " + cmd[1] + " disconnect" );
+
+                            return "Disconnected \"" + cmd[2] + "\" from the server." + info;
+                        }
+                    }
+
+                    return "Unable to find \"" + cmd[2] + "\"!" + alert;
                 case "exit":
                     Timer cls = new Timer();
                     cls.Tick += delegate{
@@ -161,25 +222,75 @@ namespace streznik{
                     return sOn ? handleCommand( "stop" ) : "";
                 case "help":
                     return "Available commands are:" + info + "\r\nhelp - shows help" + help
+                           + "\r\ndisconnect [sc/c] [ip:port] - disconnects a user from the server" + help
                            + "\r\nexit - quit the program (will first turn off server if server is running)" + help
                            + "\r\nhelp - displays all commands" + help
-                           + "\r\nsize - change maximum size of incoming message" + help
+                           + "\r\nmessage [ip:port] [message] - send a message to the client" + help
+                           + "\r\nport [port] - changes the servers port to a new one (will stop server if its running)" + help
+                           + "\r\nrestart - restarts the server" + help
+                           + "\r\nsize [size] - change maximum size of incoming message" + help
                            + "\r\nstart - start the server" + help
                            + "\r\nstop - stop the server" + help
                            + "\r\ntoggle - toggle the server state" + help;
+                case "message":
+                    if( !sOn )
+                        return "Server is not on!" + alert;
+                    else if( cmd.Length < 3 )
+                        return "Not enough arguments!" + alert;
+
+                    foreach( TcpClient cl in allClients.ToList()){
+                        if( string.Equals( cmd[1], cl.Client.RemoteEndPoint.ToString() ) ) {
+                            string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
+                            
+                            sendToClient( cl, "SERVER m " + msg );
+
+                            return "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\"." + info;
+                        }
+                    }
+
+                    return "Unable to find \"" + cmd[1] + "\"!" + alert;
+                case "port":
+                    if( sOn )
+                        setText( log, handleCommand( "stop" ) );
+
+                    try{
+                        int num = Int32.Parse( cmd[1] );
+
+                        if( num < 65353 && num > 0 )
+                            statsD["PORT"] = num.ToString();
+
+                        else
+                            num = Int32.Parse( "" );
+                    }catch{
+                        return cmd[1] + " is not a valid number to be converted to a port!" + error;
+                    }
+
+                    setStats( stats, "" );
+                    listener = new TcpListener( IPAddress.Parse( statsD["IP"] ), Int32.Parse( statsD["PORT"] ) );
+                    return "Changed port to: " + cmd[1] + info;
+                case "restart":
+                    if( !sOn )
+                        return "Server is not on!" + alert;
+
+                    setText( log, handleCommand( "stop" ) );
+                    setText( log, handleCommand( "start" ) );
+
+                    return "Server has been restarted." + info;
                 case "size":
                     try{
                         int num = Int32.Parse( cmd[1] );
 
-                        if ( num > 0 )
-                            msg_size = num;
+                        if( num > 0 )
+                            statsD["MESSAGE SIZE"] = num.ToString();
+
                         else
-                            num = Int32.Parse( "" );
+                            num = Int32.Parse("");
                     }
                     catch( Exception ){
                         return cmd[1] + " is not a valid number to be converted to a message size!" + error;
                     }
 
+                    setStats(stats, "");
                     return "Changed message size to: " + cmd[1] + info;
                 case "start":
                     if( sOn )
@@ -187,37 +298,33 @@ namespace streznik{
                     else
                         serverToggle( sOn );
 
-                    return "Starting server!" + info;
+                    return "Server started." + info;
                 case "stop":
                     if( !sOn )
                         return "Server already stopped!" + alert;
                     else
                         serverToggle( sOn );
                     
-                    return "Stopping server!" + info;
+                    return "Server stopped." + info;
                 case "toggle":
                     return sOn ? handleCommand( "stop" ) : handleCommand( "start" );
-                case "port":
-                    if( sOn )
-                        setText( log, handleCommand( "stop" ) );
-
-                    try
-                    {
-                        int num = Int32.Parse( cmd[1] );
-
-                        if( num < 65353 && num > 0 )
-                            port = num;
-                        else
-                            num = Int32.Parse( "" );
-                    }catch{
-                        return cmd[1] + " is not a valid number to be converted to a port!" + error;
-                    }
-
-                    listener = new TcpListener( IPAddress.Parse( ip ), port );
-                    return "Changed port to: " + cmd[1] + info;
                 default:
                     return "Unknown command: \"" + cmd[0] + "\"! Try help to get all commands." + alert;
             }
+        }
+
+        private async void handleMessage( string msg ){
+            string[] msgAr = msg.Split( ' ' );
+
+            switch( msgAr[0] ){
+                case "COMMAND":
+                    break;
+                case "MESSAGE":
+                    break;
+                default:
+                    break;
+            }
+            //setText(log, read + ("[" + cn + "]").PadLeft(pad, ' '));
         }
     }
 }
