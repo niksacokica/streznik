@@ -22,7 +22,6 @@ namespace streznik{
 
         private bool sOn = false;
 
-        private static int pad = 25;
         private string info = "[INFO]\r\n";
         private string error = "[ERROR]\r\n";
         private string alert = "[ALERT]\r\n";
@@ -158,7 +157,7 @@ namespace streznik{
                     stop.Close();
                 }catch{
                     foreach (TcpClient cl in allClients.ToList())
-                        sendToClient(cl, "SERVER", "sc", "disconnect");
+                        sendToClient( cl, "SERVER", "sc", "disconnect" );
                 }
             }
 
@@ -176,6 +175,7 @@ namespace streznik{
             };
 
             string json = JsonConvert.SerializeObject( forJson );
+            setText( log, json );
 
             byte[] send = Encoding.UTF8.GetBytes( json.ToCharArray(), 0, json.Length );
             cls.Write( send, 0, send.Length );
