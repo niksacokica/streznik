@@ -66,9 +66,9 @@ namespace streznik{
                 this.Invoke( new SetTextCallback( removeText ), new object[] { type, txt } );
             else{
                 string[] tmp = connected.Text.Split( '\n' );
-                for( int i = 0; i < tmp.Length; i++ ){
-                    if( string.Equals( tmp[i].Replace( "\r", "" ), txt ) ){
-                        tmp = tmp.Where( w => w != tmp[i] ).ToArray();
+                foreach( string s in tmp ){
+                    if( string.Equals( s.Replace( "\r", "" ), txt ) ){
+                        tmp = tmp.Where( w => w != s ).ToArray();
                         break;
                     }
                 }
@@ -93,6 +93,8 @@ namespace streznik{
 
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
             setStats( stats, "" );
+
+            sendToClients( cn, "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
         }
 
         private void onClientConnected( TcpClient client, NetworkStream ns, string cn ){
@@ -106,9 +108,11 @@ namespace streznik{
                     return;
                 }
 
-                string reply;
-                if( !string.IsNullOrEmpty( read ) )
-                    reply = handleMessage( read );
+                if( !string.IsNullOrEmpty( read ) ){
+                    Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>(@read);
+
+                    handleMessage( msg, client );
+                }
             }
         }
 
@@ -120,6 +124,8 @@ namespace streznik{
 
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1 ).ToString();
             setStats( stats, "" );
+
+            sendToClients( "", "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
         }
 
         private void callback( IAsyncResult iar ){
@@ -148,7 +154,7 @@ namespace streznik{
             }
             else{
                 foreach ( TcpClient cl in allClients.ToList() )
-                    sendToClient( cl, "SERVER", "sc", "disconnect" );
+                    sendToClient( cl, "SERVER", "disconnect", "sc", "" );
 
                 sOn = !on;
                 try{
@@ -157,7 +163,7 @@ namespace streznik{
                     stop.Close();
                 }catch{
                     foreach (TcpClient cl in allClients.ToList())
-                        sendToClient( cl, "SERVER", "sc", "disconnect" );
+                        sendToClient( cl, "SERVER", "disconnect", "sc", "" );
                 }
             }
 
@@ -165,20 +171,31 @@ namespace streznik{
             setStats( stats, "" );
         }
 
-        private void sendToClient( TcpClient cl, string who, string cmd, string msg ){
-            NetworkStream cls = cl.GetStream();
+        private void sendToClients( string sender, string who, string cmd, string type, string msg ){
+            foreach( TcpClient cl in allClients.ToList() ){
+                if( !cl.Client.RemoteEndPoint.ToString().Equals( sender ) )
+                    sendToClient( cl, who, cmd, type, msg );
+            }
+        }
 
-            Dictionary<string, string> forJson = new Dictionary<string, string>(){
-                { "sender", who },
-                { "command", cmd },
-                { "message", msg }
-            };
+        private void sendToClient( TcpClient cl, string who, string cmd, string type, string msg ){
+            try{
+                NetworkStream cls = cl.GetStream();
 
-            string json = JsonConvert.SerializeObject( forJson );
-            setText( log, json );
+                Dictionary<string, string> forJson = new Dictionary<string, string>(){
+                    { "sender", who },
+                    { "command", cmd },
+                    { "type", type },
+                    { "message", msg }
+                };
 
-            byte[] send = Encoding.UTF8.GetBytes( json.ToCharArray(), 0, json.Length );
-            cls.Write( send, 0, send.Length );
+                string json = JsonConvert.SerializeObject(forJson);
+
+                byte[] send = Encoding.UTF8.GetBytes(json.ToCharArray(), 0, json.Length);
+                cls.Write(send, 0, send.Length);
+            }catch{
+                setText(log, "Unable to execute: " + cmd + ". Client not responding!");
+            }
         }
 
         //tukaj dobimo text z chat boxa kdaj uporabnik pritisne enter
@@ -205,14 +222,14 @@ namespace streznik{
                 case "disconnect":
                     if( !sOn )
                         return alert + "Server is not on!";
-                    else if( cmd.Length < 3 || ( cmd[1] != "sc" && cmd[1] != "c" ) )
+                    else if( cmd.Length < 4 || ( cmd[1] != "sc" && cmd[1] != "c" ) )
                         return alert + "Argument error!";
 
                     foreach( TcpClient cl in allClients.ToList() ){
                         if( string.Equals( cmd[2], cl.Client.RemoteEndPoint.ToString() ) ){
-                            string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
+                            string reason = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] && w != cmd[2] ).ToArray() );
 
-                            sendToClient( cl, "SERVER", cmd[1], " disconnect" );
+                            sendToClient( cl, "SERVER", "disconnect", cmd[1], reason );
 
                             return info + "Disconnected \"" + cmd[2] + "\" from the server.";
                         }
@@ -231,7 +248,7 @@ namespace streznik{
                 case "help":
                     return info + "Available commands are:"
                            + "\r\nhelp - shows help"
-                           + "\r\ndisconnect [sc/c] [ip:port] - disconnects a user from the server"
+                           + "\r\ndisconnect [sc/c] [ip:port] [reason] - disconnects a user from the server"
                            + "\r\nexit - quit the program (will first turn off server if server is running)"
                            + "\r\nhelp - displays all commands"
                            + "\r\nmessage [ip:port] [message] - send a message to the client"
@@ -251,7 +268,7 @@ namespace streznik{
                         if( string.Equals( cmd[1], cl.Client.RemoteEndPoint.ToString() ) ) {
                             string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
                             
-                            sendToClient( cl, "SERVER", "m", msg );
+                            sendToClient( cl, "SERVER", "", "m", msg );
 
                             return info + "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\".";
                         }
@@ -321,16 +338,15 @@ namespace streznik{
             }
         }
 
-        private string handleMessage( string msg ){
-            string[] msgAr = msg.Split( ' ' );
+        private void handleMessage( Dictionary<string, string> msg, TcpClient sender ){
+            switch( msg["type"] ){
+                case "m":
+                    if( msg["recepient"].Equals("SERVER") || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
+                        setText( log, "[" + sender.Client.RemoteEndPoint.ToString() + "]\r\n" + msg["message"] );
 
-            switch( msgAr[0] ){
-                case "COMMAND":
-                    return "";
-                case "MESSAGE":
-                    return "";
+                    break;
                 default:
-                    return "";
+                    break;
             }
             //setText(log, read + ("[" + cn + "]").PadLeft(pad, ' '));
         }
