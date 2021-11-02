@@ -5,6 +5,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace streznik{
@@ -67,7 +68,7 @@ namespace streznik{
             else{
                 string[] tmp = connected.Text.Split( '\n' );
                 foreach( string s in tmp ){
-                    if( string.Equals( s.Replace( "\r", "" ), txt ) ){
+                    if( txt.Equals( s.Replace( "\r", "" ) ) ){
                         tmp = tmp.Where( w => w != s ).ToArray();
                         break;
                     }
@@ -94,24 +95,21 @@ namespace streznik{
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
             setStats( stats, "" );
 
-            sendToClients( cn, "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
+            sendToClients( "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
         }
 
         private void onClientConnected( TcpClient client, NetworkStream ns, string cn ){
             while( sOn ){
                 byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
-                string read;
+                string read = "";
                 try{
                     read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
-                    ns.Close();
-                }catch{
-                    return;
-                }
+                }catch{}
 
                 if( !string.IsNullOrEmpty( read ) ){
-                    Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>(@read);
+                    Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>( @read );
 
-                    handleMessage( msg, client );
+                    handleMessage( msg, cn );
                 }
             }
         }
@@ -125,7 +123,7 @@ namespace streznik{
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1 ).ToString();
             setStats( stats, "" );
 
-            sendToClients( "", "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
+            sendToClients( "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
         }
 
         private void callback( IAsyncResult iar ){
@@ -153,6 +151,8 @@ namespace streznik{
                 sOn = !on;
             }
             else{
+                setText(log, string.Join(", ", allClients.ToList()));
+
                 foreach ( TcpClient cl in allClients.ToList() )
                     sendToClient( cl, "SERVER", "disconnect", "sc", "" );
 
@@ -162,7 +162,7 @@ namespace streznik{
                     stop.GetStream().Close();
                     stop.Close();
                 }catch{
-                    foreach (TcpClient cl in allClients.ToList())
+                    foreach( TcpClient cl in allClients.ToList() )
                         sendToClient( cl, "SERVER", "disconnect", "sc", "" );
                 }
             }
@@ -171,10 +171,9 @@ namespace streznik{
             setStats( stats, "" );
         }
 
-        private void sendToClients( string sender, string who, string cmd, string type, string msg ){
+        private void sendToClients( string who, string cmd, string type, string msg ){
             foreach( TcpClient cl in allClients.ToList() ){
-                if( !cl.Client.RemoteEndPoint.ToString().Equals( sender ) )
-                    sendToClient( cl, who, cmd, type, msg );
+                sendToClient( cl, who, cmd, type, msg );
             }
         }
 
@@ -226,7 +225,7 @@ namespace streznik{
                         return alert + "Argument error!";
 
                     foreach( TcpClient cl in allClients.ToList() ){
-                        if( string.Equals( cmd[2], cl.Client.RemoteEndPoint.ToString() ) ){
+                        if( cmd[2].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
                             string reason = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] && w != cmd[2] ).ToArray() );
 
                             sendToClient( cl, "SERVER", "disconnect", cmd[1], reason );
@@ -265,7 +264,7 @@ namespace streznik{
                         return alert + "Not enough arguments!";
 
                     foreach( TcpClient cl in allClients.ToList()){
-                        if( string.Equals( cmd[1], cl.Client.RemoteEndPoint.ToString() ) ) {
+                        if( cmd[1].Equals( cl.Client.RemoteEndPoint.ToString() ) ) {
                             string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
                             
                             sendToClient( cl, "SERVER", "", "m", msg );
@@ -299,24 +298,11 @@ namespace streznik{
                         return alert + "Server is not on!";
 
                     setText( log, handleInput( "stop" ) );
+                    Task.Delay( 5000 );
                     setText( log, handleInput( "start" ) );
 
+                    Task.Delay(50000);
                     return info + "Server has been restarted.";
-                case "size":
-                    try{
-                        int num = Int32.Parse( cmd[1] );
-
-                        if( num > 0 )
-                            statsD["MESSAGE SIZE"] = num.ToString();
-
-                        else
-                            num = Int32.Parse("");
-                    }catch( Exception ){
-                        return error + cmd[1] + " is not a valid number to be converted to a message size!";
-                    }
-
-                    setStats(stats, "");
-                    return info +  "Changed message size to: " + cmd[1];
                 case "start":
                     if( sOn )
                         return alert + "Server already running!";
@@ -329,7 +315,8 @@ namespace streznik{
                         return alert + "Server already stopped!";
                     else
                         serverToggle( sOn );
-                    
+
+                    Task.Delay( 5000 );
                     return info + "Server stopped.";
                 case "toggle":
                     return sOn ? handleInput( "stop" ) : handleInput( "start" );
@@ -338,17 +325,31 @@ namespace streznik{
             }
         }
 
-        private void handleMessage( Dictionary<string, string> msg, TcpClient sender ){
+        private void handleMessage( Dictionary<string, string> msg, string sender ){
             switch( msg["type"] ){
                 case "m":
-                    if( msg["recepient"].Equals("SERVER") || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
-                        setText( log, "[" + sender.Client.RemoteEndPoint.ToString() + "]\r\n" + msg["message"] );
+                    if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
+                        setText( log, "[" + sender + "]\r\n" + msg["message"] );
+                    else if( msg["recepient"].Equals("all") ){
+                        foreach( TcpClient cl in allClients.ToList() )
+                            if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
+                                sendToClient( cl, sender, "", "ma", msg["message"]);
+
+                        setText( log, "[" + sender + "] -> [all]\r\n" + msg["message"] );
+                    }else{
+                        foreach( TcpClient cl in allClients.ToList() )
+                            if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
+                                sendToClient( cl, sender, "", "m", msg["message"] );
+
+                                setText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
+                                break;
+                            }
+                    }
 
                     break;
                 default:
                     break;
             }
-            //setText(log, read + ("[" + cn + "]").PadLeft(pad, ' '));
         }
     }
 }
