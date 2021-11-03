@@ -1,11 +1,11 @@
 ﻿using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace streznik{
@@ -76,7 +76,7 @@ namespace streznik{
             else{
                 string[] tmp = connected.Text.Split( '\n' );
                 foreach( string s in tmp ){
-                    if( txt.Equals( s.Replace( "\r", "" ) ) ){
+                    if( s.Replace( "\r", "" ).StartsWith( txt ) ){
                         tmp = tmp.Where( w => w != s ).ToArray();
                         break;
                     }
@@ -107,7 +107,7 @@ namespace streznik{
             sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
-        private void onClientConnected( NetworkStream ns, string cn ){
+        private void onClientConnected( TcpClient cl, NetworkStream ns, string cn ){
             while( sOn ){
                 byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
                 string read = "";
@@ -118,7 +118,7 @@ namespace streznik{
                 if( !string.IsNullOrEmpty( read ) ){
                     Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>( @read );
 
-                    handleMessage( msg, cn );
+                    handleMessage( cl, msg, cn );
                 }
             }
         }
@@ -149,7 +149,7 @@ namespace streznik{
             string cn = client.Client.RemoteEndPoint.ToString();
 
             onClientConnect( client, cn );
-            onClientConnected( ns, cn );
+            onClientConnected( client, ns, cn );
             onClientDisconnect( client, cn );
         }
 
@@ -233,8 +233,18 @@ namespace streznik{
                     else if( cmd.Length < 4 || ( cmd[1] != "sc" && cmd[1] != "c" ) )
                         return alert + "Argument error!";
 
+                    string name = "";
+                    if( aliases.ContainsKey( cmd[2] ) ){
+                        name = cmd[2];
+                    }
+                    else if( aliases.ContainsValue( cmd[2] ) ){
+                        name = aliases.First( k => k.Value == cmd[2] ).Key;
+                    }
+                    else
+                        return alert + "Couldn't find nickname/ip: \"" + cmd[2] + "\"!";
+
                     foreach( TcpClient cl in allClients.ToList() ){
-                        if( cmd[2].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
+                        if( name.Equals( cl.Client.RemoteEndPoint.ToString() ) ){
                             string reason = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] && w != cmd[2] ).ToArray() );
 
                             sendToClient( cl, "SERVER", "disconnect", cmd[1], reason );
@@ -256,10 +266,11 @@ namespace streznik{
                 case "help":
                     return info + "Available commands are:"
                            + "\r\nhelp - shows help"
-                           + "\r\ndisconnect [sc/c] [ip:port] [reason] - disconnects a user from the server"
+                           + "\r\ndisconnect [sc/c] [ip:port/nickname] [reason] - disconnects a user from the server"
                            + "\r\nexit - quit the program (will first turn off server if server is running)"
                            + "\r\nhelp - displays all commands"
                            + "\r\nmessage [ip:port/\"all\"/nickname] [message] - send a message to the client"
+                           + "\r\nnick [ip:port/nickname] [new nickname] - change/give user nickname"
                            + "\r\nport [port] - changes the servers port to a new one (will stop server if its running)"
                            + "\r\nrestart - restarts the server"
                            + "\r\nstart - start the server"
@@ -278,8 +289,18 @@ namespace streznik{
                         return info + "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\".";
                     }
                     else{
+                        string rec = "";
+                        if( aliases.ContainsKey( cmd[1] ) ){
+                            rec = cmd[2];
+                        }
+                        else if( aliases.ContainsValue( cmd[1] ) ){
+                            rec = aliases.First( k => k.Value == cmd[1] ).Key;
+                        }
+                        else
+                            return alert + "Couldn't find nickname/ip: \"" + cmd[1] + "\"!";
+
                         foreach( TcpClient cl in allClients.ToList()){
-                            if( cmd[1].Equals( cl.Client.RemoteEndPoint.ToString() ) ) {
+                            if( rec.Equals( cl.Client.RemoteEndPoint.ToString() ) ) {
                                 sendToClient( cl, "SERVER", "", "m", msg );
 
                                 return info + "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\".";
@@ -288,6 +309,36 @@ namespace streznik{
                     }
 
                     return alert + "Unable to find \"" + cmd[1] + "\"!";
+                case "nick":
+                    if( !sOn )
+                        return alert + "Server is not on!";
+                    else if( cmd.Length < 3 )
+                        return alert + "Not enough arguments!";
+
+                    string key = "";
+                    string nick = string.Join( "_", cmd.Where(w => w != cmd[0] && w != cmd[1] ).ToArray() );
+                    if( aliases.ContainsKey( cmd[1] ) ){
+                        key = cmd[1];
+                        aliases[key] = nick;
+                    }
+                    else if( aliases.ContainsValue( cmd[1] ) ){
+                        key = aliases.First(k => k.Value == cmd[1]).Key;
+                        aliases[key] = nick;
+                    }
+                    else
+                        return alert + "Couldn't find nickname/ip: \"" + cmd[1] + "\"!";
+
+                    string[] users = connected.Text.Split( '\n' );
+                    foreach( string user in users )
+                        if( user.Replace( "\r", "" ).StartsWith( key ) ){
+                            users[Array.IndexOf( users, user )] = key + " (" + nick + ")";
+                            setText( connected, string.Join( "\r\n", users ) );
+                        }
+                    
+                    sendToClients( "SERVER", "update online", "sc", connected.Text );
+                    sendToClients( "SERVER", "", "ma", "Changed/gave " + key + " nickname to: \"" + nick + "\".");
+
+                    return info + "Changed/gave " + cmd[1] + " the \"" + nick + "\" nickname!";
                 case "port":
                     if( sOn )
                         appendText( log, handleInput( "stop" ) );
@@ -336,21 +387,21 @@ namespace streznik{
             }
         }
 
-        private void handleMessage( Dictionary<string, string> msg, string sender ){
-            switch( msg["type"] ){
-                case "m":
+        private void handleMessage( TcpClient origin, Dictionary<string, string> msg, string sender ){
+            switch( msg["command"] ){
+                case "message":
                     if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
                         appendText( log, "[" + sender + "]\r\n" + msg["message"] );
                     else if( msg["recepient"].Equals("all") ){
                         foreach( TcpClient cl in allClients.ToList() )
                             if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
-                                sendToClient( cl, sender, "", "ma", msg["message"]);
+                                sendToClient( cl, sender, "", msg["type"].Equals( "mc" ) ? "mca" : "ma", msg["message"]);
 
                         appendText( log, "[" + sender + "] -> [all]\r\n" + msg["message"] );
                     }else{
                         foreach( TcpClient cl in allClients.ToList() )
                             if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
-                                sendToClient( cl, sender, "", "m", msg["message"] );
+                                sendToClient( cl, sender, "", msg["type"], msg["message"] );
 
                                 appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
                                 break;
@@ -358,7 +409,7 @@ namespace streznik{
                     }
 
                     break;
-                case "n":
+                case "nick":
                     foreach( string val in aliases.Values )
                         if( val.Equals( msg["message"] ) )
                             break;
@@ -372,7 +423,31 @@ namespace streznik{
                             setText( connected, string.Join( "\r\n", users ) );
                         }
                     
+                    appendText( log, info + sender + " set their nickname to: \"" + msg["message"] + "\".");
                     sendToClients( "SERVER", "update online", "sc", connected.Text );
+                    sendToClients( sender, "", "ma", sender + " set their nickname to: \"" + msg["message"] + "\"." );
+
+                    break;
+                //za nalogu
+                case "čas":
+                    appendText( log, info + sender + " je prosil sem da mu povem trenutni čas, pa sem mu povedal.");
+                    sendToClient( origin, "SERVER", "", "m", "Trenutni čas je: " + DateTime.Now + "." );
+
+                    break;
+                case "dir":
+                    appendText( log, info + sender + " je vprašal za delovni direktorij, pa sem ga poslal." );
+                    sendToClient( origin, "SERVER", "", "m", "Delovni direktorij je: " + Directory.GetCurrentDirectory().ToString() );
+
+                    break;
+                case "info":
+                    appendText( log, info + sender + " je vprašal za sistemske informacije, pa sem jih poslal.");
+                    sendToClient( origin, "SERVER", "", "m", "Ime sistema je: \"" + Environment.MachineName + "\" in OS je: \"" + Environment.OSVersion.VersionString.ToString() + "\"." );
+
+                    break;
+                case "pozdravi":
+                    appendText( log, info + sender + " je prosil sem da ga pozdravim, pa sem ga pozdravil.");
+                    sendToClient( origin, "SERVER", "", "m", "Pozdravljen " + sender + "." );
+
                     break;
                 default:
                     break;
