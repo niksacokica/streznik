@@ -18,8 +18,9 @@ namespace streznik{
             { "CONNECTED CLIENTS", "0" }
         };
 
-        private TcpListener listener = new TcpListener( IPAddress.Parse( statsD["IP"] ), Int32.Parse( statsD["PORT"] ) );
+        private TcpListener listener = new TcpListener(IPAddress.Parse(statsD["IP"]), Int32.Parse(statsD["PORT"]));
         private static List<TcpClient> allClients = new List<TcpClient>();
+        private Dictionary<string, string> aliases = new Dictionary<string, string>();
 
         private bool sOn = false;
 
@@ -37,8 +38,8 @@ namespace streznik{
             Timer cc = new Timer();
             cc.Tick += delegate {
                 foreach (TcpClient cl in allClients.ToList() ){
-                    if (!isConnected(cl.Client))
-                        try{ onClientDisconnect(cl, cl.Client.RemoteEndPoint.ToString()); }catch{}
+                    if( !isConnected( cl.Client ) )
+                        try{ onClientDisconnect( cl, cl.Client.RemoteEndPoint.ToString() ); }catch{}
                 }
             };
             cc.Interval = 1000;
@@ -55,11 +56,18 @@ namespace streznik{
             }
         }
 
+        private void appendText( TextBox type, string txt ){
+            if( type.InvokeRequired )
+                this.Invoke( new SetTextCallback( appendText ), new object[] { type, txt } );
+            else
+                type.AppendText( txt + ( type.Name.Equals( "log" ) ? "\r\n\r\n" : "\r\n" ) );
+        }
+
         private void setText( TextBox type, string txt ){
             if( type.InvokeRequired )
                 this.Invoke( new SetTextCallback( setText ), new object[] { type, txt } );
             else
-                type.AppendText( txt + ( type.Name.Equals( "log" ) ? "\r\n\r\n" : "\r\n" ) );
+                type.Text = txt;
         }
 
         private void removeText( TextBox type, string txt ){
@@ -87,18 +95,19 @@ namespace streznik{
         }
 
         private void onClientConnect( TcpClient client, string cn ){
-            allClients.Add(client);
+            allClients.Add( client );
+            aliases.Add( cn, "" );
 
-            setText( log, info + cn + " has connected." );
-            setText( connected, cn );
+            appendText( log, info + cn + " has connected." );
+            appendText( connected, cn );
 
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
             setStats( stats, "" );
 
-            sendToClients( "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
+            sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
-        private void onClientConnected( TcpClient client, NetworkStream ns, string cn ){
+        private void onClientConnected( NetworkStream ns, string cn ){
             while( sOn ){
                 byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
                 string read = "";
@@ -116,14 +125,16 @@ namespace streznik{
 
         private void onClientDisconnect( TcpClient client, string cn ){
             allClients.Remove( client );
+            aliases.Remove( cn );
 
-            setText( log, info + cn + " has disconnected." );
+            if( sOn )
+                appendText( log, info + cn + " has disconnected." );
             removeText( connected, cn );
 
-            statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1 ).ToString();
+            statsD["CONNECTED CLIENTS"] = ( Math.Max( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1, 0 ) ).ToString();
             setStats( stats, "" );
 
-            sendToClients( "SERVER", "update online", "sc", string.Join( "\r\n", allClients.Select( c => c.Client.RemoteEndPoint.ToString() ) ) );
+            sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
         private void callback( IAsyncResult iar ){
@@ -138,12 +149,12 @@ namespace streznik{
             string cn = client.Client.RemoteEndPoint.ToString();
 
             onClientConnect( client, cn );
-            onClientConnected( client, ns, cn );
+            onClientConnected( ns, cn );
             onClientDisconnect( client, cn );
         }
 
         private void serverToggle( bool on ){
-            setText( log, info + ( on ? "Stopping server." : "Starting server." ) );
+            appendText( log, info + ( on ? "Stopping server." : "Starting server." ) );
 
             if ( !on ){
                 listener.Start();
@@ -151,9 +162,7 @@ namespace streznik{
                 sOn = !on;
             }
             else{
-                setText(log, string.Join(", ", allClients.ToList()));
-
-                foreach ( TcpClient cl in allClients.ToList() )
+                foreach (TcpClient cl in allClients.ToList())
                     sendToClient( cl, "SERVER", "disconnect", "sc", "" );
 
                 sOn = !on;
@@ -193,7 +202,7 @@ namespace streznik{
                 byte[] send = Encoding.UTF8.GetBytes(json.ToCharArray(), 0, json.Length);
                 cls.Write(send, 0, send.Length);
             }catch{
-                setText(log, "Unable to execute: " + cmd + ". Client not responding!");
+                appendText(log, "Unable to execute: " + cmd + ". Client not responding!");
             }
         }
 
@@ -250,10 +259,9 @@ namespace streznik{
                            + "\r\ndisconnect [sc/c] [ip:port] [reason] - disconnects a user from the server"
                            + "\r\nexit - quit the program (will first turn off server if server is running)"
                            + "\r\nhelp - displays all commands"
-                           + "\r\nmessage [ip:port] [message] - send a message to the client"
+                           + "\r\nmessage [ip:port/\"all\"/nickname] [message] - send a message to the client"
                            + "\r\nport [port] - changes the servers port to a new one (will stop server if its running)"
                            + "\r\nrestart - restarts the server"
-                           + "\r\nsize [size] - change maximum size of incoming message"
                            + "\r\nstart - start the server"
                            + "\r\nstop - stop the serve"
                            + "\r\ntoggle - toggle the server state";
@@ -263,20 +271,26 @@ namespace streznik{
                     else if( cmd.Length < 3 )
                         return alert + "Not enough arguments!";
 
-                    foreach( TcpClient cl in allClients.ToList()){
-                        if( cmd[1].Equals( cl.Client.RemoteEndPoint.ToString() ) ) {
-                            string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
-                            
-                            sendToClient( cl, "SERVER", "", "m", msg );
+                    string msg = string.Join( " ", cmd.Where( w => w != cmd[1] && w != cmd[0] ).ToArray() );
 
-                            return info + "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\".";
+                    if( cmd[1].Equals( "all" ) ){
+                        sendToClients( "SERVER", "", "ma", msg );
+                        return info + "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\".";
+                    }
+                    else{
+                        foreach( TcpClient cl in allClients.ToList()){
+                            if( cmd[1].Equals( cl.Client.RemoteEndPoint.ToString() ) ) {
+                                sendToClient( cl, "SERVER", "", "m", msg );
+
+                                return info + "Sent a message \"" + msg + "\" to \"" + cmd[1] + "\".";
+                            }
                         }
                     }
 
                     return alert + "Unable to find \"" + cmd[1] + "\"!";
                 case "port":
                     if( sOn )
-                        setText( log, handleInput( "stop" ) );
+                        appendText( log, handleInput( "stop" ) );
 
                     try{
                         int num = Int32.Parse( cmd[1] );
@@ -297,11 +311,9 @@ namespace streznik{
                     if( !sOn )
                         return alert + "Server is not on!";
 
-                    setText( log, handleInput( "stop" ) );
-                    Task.Delay( 5000 );
-                    setText( log, handleInput( "start" ) );
+                    appendText( log, handleInput( "stop" ) );
+                    appendText( log, handleInput( "start" ) );
 
-                    Task.Delay(50000);
                     return info + "Server has been restarted.";
                 case "start":
                     if( sOn )
@@ -316,7 +328,6 @@ namespace streznik{
                     else
                         serverToggle( sOn );
 
-                    Task.Delay( 5000 );
                     return info + "Server stopped.";
                 case "toggle":
                     return sOn ? handleInput( "stop" ) : handleInput( "start" );
@@ -329,23 +340,39 @@ namespace streznik{
             switch( msg["type"] ){
                 case "m":
                     if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
-                        setText( log, "[" + sender + "]\r\n" + msg["message"] );
+                        appendText( log, "[" + sender + "]\r\n" + msg["message"] );
                     else if( msg["recepient"].Equals("all") ){
                         foreach( TcpClient cl in allClients.ToList() )
                             if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
                                 sendToClient( cl, sender, "", "ma", msg["message"]);
 
-                        setText( log, "[" + sender + "] -> [all]\r\n" + msg["message"] );
+                        appendText( log, "[" + sender + "] -> [all]\r\n" + msg["message"] );
                     }else{
                         foreach( TcpClient cl in allClients.ToList() )
                             if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
                                 sendToClient( cl, sender, "", "m", msg["message"] );
 
-                                setText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
+                                appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
                                 break;
                             }
                     }
 
+                    break;
+                case "n":
+                    foreach( string val in aliases.Values )
+                        if( val.Equals( msg["message"] ) )
+                            break;
+
+                    aliases[sender] = msg["message"];
+                    
+                    string[] users = connected.Text.Split( '\n' );
+                    foreach( string user in users )
+                        if( user.Replace( "\r", "" ).StartsWith( sender ) ){
+                            users[Array.IndexOf( users, user )] = users[Array.IndexOf(users, user)] + " (" + msg["message"] + ")";
+                            setText( connected, string.Join( "\r\n", users ) );
+                        }
+                    
+                    sendToClients( "SERVER", "update online", "sc", connected.Text );
                     break;
                 default:
                     break;
