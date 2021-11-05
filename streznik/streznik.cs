@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Security.Cryptography;
 using System.Text;
 using System.Windows.Forms;
 
@@ -104,6 +105,7 @@ namespace streznik{
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
             setStats( stats, "" );
 
+            sendToClient( client, "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
             sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
@@ -181,6 +183,8 @@ namespace streznik{
         }
 
         private void sendToClients( string who, string cmd, string type, string msg ){
+            appendText(log, msg);
+
             foreach( TcpClient cl in allClients.ToList() ){
                 sendToClient( cl, who, cmd, type, msg );
             }
@@ -197,12 +201,12 @@ namespace streznik{
                     { "message", msg }
                 };
 
-                string json = JsonConvert.SerializeObject(forJson);
+                string json = JsonConvert.SerializeObject( forJson );
 
-                byte[] send = Encoding.UTF8.GetBytes(json.ToCharArray(), 0, json.Length);
-                cls.Write(send, 0, send.Length);
+                byte[] send = Encoding.UTF8.GetBytes( json.ToCharArray(), 0, json.Length );
+                cls.Write( send, 0, send.Length );
             }catch{
-                appendText(log, "Unable to execute: " + cmd + ". Client not responding!");
+                appendText( log, "Unable to execute: " + cmd + ". Client not responding!" );
             }
         }
 
@@ -317,6 +321,9 @@ namespace streznik{
 
                     string key = "";
                     string nick = string.Join( "_", cmd.Where(w => w != cmd[0] && w != cmd[1] ).ToArray() );
+                    if( nick.Equals( "SERVER" ) || nick.Equals( "STREŽNIK" ) || nick.Equals( "all" ) || nick.Equals( "vsi" ) )
+                        return alert + "Couldn't set " + cmd[1] + " nickname to: " + nick + "!";
+
                     if( aliases.ContainsKey( cmd[1] ) ){
                         key = cmd[1];
                         aliases[key] = nick;
@@ -337,6 +344,7 @@ namespace streznik{
                     
                     sendToClients( "SERVER", "update online", "sc", connected.Text );
                     sendToClients( "SERVER", "", "ma", "Changed/gave " + key + " nickname to: \"" + nick + "\".");
+                    sendToClients( "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
 
                     return info + "Changed/gave " + cmd[1] + " the \"" + nick + "\" nickname!";
                 case "port":
@@ -390,18 +398,18 @@ namespace streznik{
         private void handleMessage( TcpClient origin, Dictionary<string, string> msg, string sender ){
             switch( msg["command"] ){
                 case "message":
-                    if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
-                        appendText( log, "[" + sender + "]\r\n" + msg["message"] );
-                    else if( msg["recepient"].Equals("all") ){
+                    if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( "STREŽNIK" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
+                        appendText( log, "[" + sender + "]\r\n" + ( msg["type"].Equals( "mc" ) ? decrypt( msg["message"], msg["command"] + msg["type"] ) : msg["message"] ) );
+                    else if( msg["recepient"].Equals( "all" ) || msg["recepient"].Equals( "vsi" ) ){
                         foreach( TcpClient cl in allClients.ToList() )
                             if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
-                                sendToClient( cl, sender, "", msg["type"].Equals( "mc" ) ? "mca" : "ma", msg["message"]);
+                                sendToClient( cl, sender, msg["command"], msg["type"], msg["message"] );
 
-                        appendText( log, "[" + sender + "] -> [all]\r\n" + msg["message"] );
+                        appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + ( msg["type"].Equals( "mca" ) ? decrypt( msg["message"], msg["command"] + msg["type"] ) : msg["message"] ) );
                     }else{
                         foreach( TcpClient cl in allClients.ToList() )
                             if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
-                                sendToClient( cl, sender, "", msg["type"], msg["message"] );
+                                sendToClient( cl, sender, msg["command"], msg["type"], msg["message"] );
 
                                 appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
                                 break;
@@ -410,22 +418,19 @@ namespace streznik{
 
                     break;
                 case "nick":
-                    foreach( string val in aliases.Values )
-                        if( val.Equals( msg["message"] ) )
-                            break;
-
                     aliases[sender] = msg["message"];
                     
                     string[] users = connected.Text.Split( '\n' );
                     foreach( string user in users )
                         if( user.Replace( "\r", "" ).StartsWith( sender ) ){
-                            users[Array.IndexOf( users, user )] = users[Array.IndexOf(users, user)] + " (" + msg["message"] + ")";
+                            users[Array.IndexOf( users, user )] = users[Array.IndexOf(users, user)].Split( ' ' )[0] + " (" + msg["message"] + ")";
                             setText( connected, string.Join( "\r\n", users ) );
                         }
                     
                     appendText( log, info + sender + " set their nickname to: \"" + msg["message"] + "\".");
                     sendToClients( "SERVER", "update online", "sc", connected.Text );
                     sendToClients( sender, "", "ma", sender + " set their nickname to: \"" + msg["message"] + "\"." );
+                    sendToClients( "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
 
                     break;
                 //za nalogu
@@ -452,6 +457,26 @@ namespace streznik{
                 default:
                     break;
             }
+        }
+
+        private string decrypt( string msg, string key){
+            byte[] Bkey = new byte[16];
+            for( int i = 0; i < 16; i += 2 ){
+                byte[] B = BitConverter.GetBytes( key[i % key.Length] );
+                Array.Copy( B, 0, Bkey, i, 2 );
+            }
+
+            TripleDESCryptoServiceProvider ddes = new TripleDESCryptoServiceProvider();
+            ddes.Key = Bkey;
+            ddes.Mode = CipherMode.ECB;
+            ddes.Padding = PaddingMode.PKCS7;
+
+            ICryptoTransform decrypt = ddes.CreateDecryptor();
+            byte[] byteTXT = Convert.FromBase64String( msg );
+            byte[] result = decrypt.TransformFinalBlock( byteTXT, 0, byteTXT.Length );
+           
+            ddes.Clear();
+            return Encoding.UTF8.GetString( result, 0, result.Length );
         }
     }
 }
