@@ -435,18 +435,19 @@ namespace streznik{
                     break;
                 //za nalogu
                 case "čas":
-                    appendText( log, info + sender + " je prosil sem da mu povem trenutni čas, pa sem mu povedal.");
+                    appendText( log, info + sender + " je prosil sem da mu povem trenutni čas, pa sem mu povedal: \"" + DateTime.Now + "\".");
                     sendToClient( origin, "SERVER", "", "m", "Trenutni čas je: " + DateTime.Now + "." );
 
                     break;
                 case "dir":
-                    appendText( log, info + sender + " je vprašal za delovni direktorij, pa sem ga poslal." );
+                    appendText( log, info + sender + " je vprašal za delovni direktorij, pa sem poslal: \"" + Directory.GetCurrentDirectory().ToString() + "\"." );
                     sendToClient( origin, "SERVER", "", "m", "Delovni direktorij je: " + Directory.GetCurrentDirectory().ToString() );
 
                     break;
                 case "info":
-                    appendText( log, info + sender + " je vprašal za sistemske informacije, pa sem jih poslal.");
-                    sendToClient( origin, "SERVER", "", "m", "Ime sistema je: \"" + Environment.MachineName + "\" in OS je: \"" + Environment.OSVersion.VersionString.ToString() + "\"." );
+                    string sys = "Ime sistema je: \"" + Environment.MachineName + "\" in OS je: \"" + Environment.OSVersion.VersionString.ToString() + "\".";
+                    appendText( log, info + sender + " je vprašal za sistemske informacije, pa sem poslal: " + sys);
+                    sendToClient( origin, "SERVER", "", "m", sys );
 
                     break;
                 case "pozdravi":
@@ -454,9 +455,66 @@ namespace streznik{
                     sendToClient( origin, "SERVER", "", "m", "Pozdravljen " + sender + "." );
 
                     break;
+                case "šah":
+                    string[] deli = msg["message"].Split( ' ' );
+                    string[] polja = new string[8];
+                    string fen = "\r\n_ _ _ _ _ _ _ _ \r\n";
+
+                    polja = deli[0].Split( '/' );
+
+                    for( int i=0; i<polja.Length; i++ ){
+                        for( int j=0; j<polja[i].Length; j++ )
+                            if( Char.IsDigit( polja[i][j] ) )
+                                fen += new StringBuilder().Insert( 0, "| ", polja[i][j] - '0').ToString();
+                            else
+                                fen += "|" + polja[i][j];
+                        fen += "|\r\n";
+                    }
+
+                    fen += "¯ ¯ ¯ ¯ ¯ ¯ ¯ ¯ \r\nNa vrsti je: " + ( deli[1].Equals( "w" ) ? "beli" : "črni" ) + "\r\n";
+
+                    bool rokada = deli[2].Contains("K") || deli[2].Contains("Q") || deli[2].Contains("k") || deli[2].Contains("q");
+                    fen += "\r\nMožnosti rokade:" + ( rokada ? "\r\n" + ( deli[2].Contains( "K" ) ? "Beli, kraljeva stran\r\n" : "" ) + ( deli[2].Contains( "Q" ) ? "Beli, damina stran\r\n" : "" ) + ( deli[2].Contains( "k" ) ? "Črni, kraljeva stran\r\n" : "" ) + ( deli[2].Contains( "q" ) ? "Črni, damina stran\r\n" : "" ) : " Ni možnosti!\r\n");
+
+                    fen += "\r\nMožnost en passant: " + ( deli[3].Equals( "-" ) ? "noben" : deli[3] ) + "\r\n";
+
+                    fen += "\r\nŠtevilo polpotez: " + deli[4] + "\r\n";
+
+                    fen += "\r\n Številka trenutne poteze: " + deli[5];
+
+                    appendText( log, info + sender + " je prosil da mu lepo izpišem FEN stanje: \"" + msg["message"] + "\". Pa sem mu poslal:" + fen );
+                    sendToClient( origin, "SERVER", "", "m", "Lepo izpisano FEN stanje: \"" + msg["message"] + "\", zgleda ovak:" + fen );
+
+                    break;
+                case "šifriraj":
+                    string emsg = encrypt( msg["message"], "šifrirano" + "c" );
+                    appendText( log, info + sender + " je prosil da mu šifriram sporočilo: \"" + msg["message"] + "\", pa sem to naredil: \"" + emsg + "\".");
+                    sendToClient( origin, "SERVER", "šifrirano", "c", emsg );
+
+                    break;
                 default:
                     break;
             }
+        }
+
+        private string encrypt( string txt, string key ){
+            byte[] Bkey = new byte[16];
+            for( int i = 0; i < 16; i += 2 ){
+                byte[] B = BitConverter.GetBytes( key[i % key.Length] );
+                Array.Copy( B, 0, Bkey, i, 2 );
+            }
+
+            TripleDESCryptoServiceProvider edes = new TripleDESCryptoServiceProvider();
+            edes.Key = Bkey;
+            edes.Mode = CipherMode.ECB;
+            edes.Padding = PaddingMode.PKCS7;
+
+            ICryptoTransform encrypt = edes.CreateEncryptor();
+            byte[] byteTXT = UTF8Encoding.UTF8.GetBytes( txt );
+            byte[] result = encrypt.TransformFinalBlock( byteTXT, 0 , byteTXT.Length );
+
+            edes.Clear();
+            return Convert.ToBase64String( result, 0, result.Length );
         }
 
         private string decrypt( string msg, string key){
