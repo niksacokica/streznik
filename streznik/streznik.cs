@@ -11,7 +11,7 @@ using System.Windows.Forms;
 
 namespace streznik{
     public partial class Strežnik : Form {
-        private static Dictionary<string, string> statsD = new Dictionary<string, string>(){
+        private static Dictionary<string, string> statsD = new Dictionary<string, string>(){ //dictionary ki se uporablja za statistiko strežnika
             { "IP", "127.0.0.1" },
             { "PORT", "1507" },
             { "MESSAGE SIZE", "1024" },
@@ -19,35 +19,57 @@ namespace streznik{
             { "CONNECTED CLIENTS", "0" }
         };
 
-        private TcpListener listener = new TcpListener(IPAddress.Parse(statsD["IP"]), Int32.Parse(statsD["PORT"]));
-        private static List<TcpClient> allClients = new List<TcpClient>();
-        private Dictionary<string, string> aliases = new Dictionary<string, string>();
+        private TcpListener listener = new TcpListener( IPAddress.Parse( statsD["IP"] ), Int32.Parse( statsD["PORT"] ) );
+        private static List<TcpClient> allClients = new List<TcpClient>(); //list ki vsebuje vse povezane uporabnike
+        private Dictionary<string, string> aliases = new Dictionary<string, string>(); //dictionary ki vsebuje vse vzdevke od uporabnikov
 
-        private bool sOn = false;
+        private bool sOn = false; //bool ki kotrolira ali je strežnik vkloljen ali ne
 
+        //besedila ki se uporabljajo za različne vrsti sporočila
         private string info = "[INFO]\r\n";
         private string error = "[ERROR]\r\n";
         private string alert = "[ALERT]\r\n";
 
-        delegate void SetTextCallback( TextBox type, string text );
+        delegate void SetTextCallback( TextBox type, string text ); //text callback ki se uporablja za invoke funckije
 
+        //spremenljivke za igro ugani besedo
+        private Dictionary<string, string> besede = new Dictionary<string, string>(){
+            { "angel", "a__e_" },
+            { "oko", "_k_" },
+            { "ognjemet", "o___e_e_" },
+            { "buče", "_u_e" },
+            { "dojenček", "_o_e__e_" },
+            { "cvet", "__e_" },
+            { "brada", "__a_a" },
+            { "mavrica", "_a__i_a" },
+            { "žirafa", "_i_a_a" },
+            { "očala", "o_a_a" }
+        };
+        private Dictionary<string, int> statsG = new Dictionary<string, int>();
+        private string trenutna = "";
+        private bool gameOn = false;
+
+        //glavna fukncija katera pokrene cel program
         public Strežnik(){
             InitializeComponent();
 
             setStats( stats, "" );
 
+            //timer ki vsako sekundo preveri ali se je slučajno kateri odjemalec odpspojil na način da ni poslal sporočila da se je odpojil (interneta je zmanjkalo,...)
             Timer cc = new Timer();
             cc.Tick += delegate {
-                foreach (TcpClient cl in allClients.ToList() ){
+                foreach( TcpClient cl in allClients.ToList() ){
                     if( !isConnected( cl.Client ) )
-                        try{ onClientDisconnect( cl, cl.Client.RemoteEndPoint.ToString() ); }catch{}
+                        onClientDisconnect( cl, cl.Client.RemoteEndPoint.ToString() );
                 }
             };
             cc.Interval = 1000;
             cc.Start();
         }
 
-        private void setStats(TextBox type, string txt){
+        //funkcija ki zamenja text v textbox ki jo kliče z ukazi ki so v statsD
+        //uporablja se zato ker rabimo invoke zato ker različni thready nemorejo klicat textbox
+        private void setStats( TextBox type, string txt ){
             if( type.InvokeRequired )
                 this.Invoke( new SetTextCallback( setStats ), new object[] { type, txt });
             else{
@@ -57,6 +79,8 @@ namespace streznik{
             }
         }
 
+        //funkcija ki doda text v textbox ki ga kliče
+        //uporablja se zato ker rabimo invoke zato ker različni thready nemorejo klicat textbox
         private void appendText( TextBox type, string txt ){
             if( type.InvokeRequired )
                 this.Invoke( new SetTextCallback( appendText ), new object[] { type, txt } );
@@ -64,6 +88,8 @@ namespace streznik{
                 type.AppendText( txt + ( type.Name.Equals( "log" ) ? "\r\n\r\n" : "\r\n" ) );
         }
 
+        //funkcija ki zamenja text v textbox ki ga kliče
+        //uporablja se zato ker rabimo invoke zato ker različni thready nemorejo klicat textbox
         private void setText( TextBox type, string txt ){
             if( type.InvokeRequired )
                 this.Invoke( new SetTextCallback( setText ), new object[] { type, txt } );
@@ -71,6 +97,8 @@ namespace streznik{
                 type.Text = txt;
         }
 
+        //funkcija ki umakne ip iz "connected" texbox kdaj se negdo disconnecta
+        //uporablja se zato ker rabimo invoke zato ker različni thready nemorejo klicat textbox
         private void removeText( TextBox type, string txt ){
             if( connected.InvokeRequired )
                 this.Invoke( new SetTextCallback( removeText ), new object[] { type, txt } );
@@ -87,6 +115,7 @@ namespace streznik{
             }
         }
 
+        //fukncija ki preveri če je uporabnik še vedno povezan
         public static bool isConnected( Socket socket ){
             try{
                 return !( socket.Poll( 1, SelectMode.SelectRead ) && socket.Available == 0 );
@@ -95,6 +124,8 @@ namespace streznik{
             }
         }
 
+
+        //funkcija ki se kliče kdaj se uporabnik poveže
         private void onClientConnect( TcpClient client, string cn ){
             allClients.Add( client );
             aliases.Add( cn, "" );
@@ -103,12 +134,19 @@ namespace streznik{
             appendText( connected, cn );
 
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
+            if( gameOn )
+                statsG[cn] = 0;
             setStats( stats, "" );
 
             sendToClient( client, "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
+            sendToClient( client, "SERVER", "gameStatus", "sc", gameOn.ToString() );
             sendToClients( "SERVER", "update online", "sc", connected.Text );
+
+            //sporočilo da se je nov odjemalec povezal
+            sendToClients( "SERVER", "", "ma", cn + " se je povezal na strežnik!" );
         }
 
+        //funkcija ki se kliče kdaj je uporabnik povezan
         private void onClientConnected( TcpClient cl, NetworkStream ns, string cn ){
             while( sOn ){
                 byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
@@ -118,13 +156,14 @@ namespace streznik{
                 }catch{}
 
                 if( !string.IsNullOrEmpty( read ) ){
-                    Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>( @read );
+                    Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>( @read ); //sporočilo prejeto od uporabnika, ki se šalje kot json, se nazaj da v obliko dictioanry
 
                     handleMessage( cl, msg, cn );
                 }
             }
         }
 
+        //funkcija ki se kliče kdaj se uporabnik odspoji
         private void onClientDisconnect( TcpClient client, string cn ){
             allClients.Remove( client );
             aliases.Remove( cn );
@@ -134,11 +173,13 @@ namespace streznik{
             removeText( connected, cn );
 
             statsD["CONNECTED CLIENTS"] = ( Math.Max( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1, 0 ) ).ToString();
+            statsG.Remove( cn );
             setStats( stats, "" );
 
             sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
+        //funkcija ki nam omogoča da se spoje različni uporabniki skupa
         private void callback( IAsyncResult iar ){
             TcpClient client = listener.EndAcceptTcpClient( iar );
             if( !sOn ){
@@ -146,7 +187,7 @@ namespace streznik{
                 return;
             }
 
-            listener.BeginAcceptTcpClient( new AsyncCallback( callback ), null );
+            listener.BeginAcceptTcpClient( new AsyncCallback( callback ), null ); //po uspešni povezavi enega uporabnika, začne slišati uza novega
             NetworkStream ns = client.GetStream();
             string cn = client.Client.RemoteEndPoint.ToString();
 
@@ -155,6 +196,7 @@ namespace streznik{
             onClientDisconnect( client, cn );
         }
 
+        //funkcija ki menja stanje serverja ( on/off )
         private void serverToggle( bool on ){
             appendText( log, info + ( on ? "Stopping server." : "Starting server." ) );
 
@@ -164,43 +206,40 @@ namespace streznik{
                 sOn = !on;
             }
             else{
-                foreach (TcpClient cl in allClients.ToList())
+                foreach( TcpClient cl in allClients.ToList() ) //kdaj bi se strežnik izklopil, pošlje to informacijo vsim odjemalcom trenutno povezanim
                     sendToClient( cl, "SERVER", "disconnect", "sc", "" );
 
                 sOn = !on;
-                try{
-                    TcpClient stop = new TcpClient( statsD["IP"], Int32.Parse( statsD["PORT"] ) );
-                    stop.GetStream().Close();
-                    stop.Close();
-                }catch{
-                    foreach( TcpClient cl in allClients.ToList() )
-                        sendToClient( cl, "SERVER", "disconnect", "sc", "" );
-                }
+                //poveže se na sebe zato ker listener še vedno čaka eno povezavo
+                TcpClient stop = new TcpClient( statsD["IP"], Int32.Parse( statsD["PORT"] ) );
+                stop.GetStream().Close();
+                stop.Close();
+
+                gameOn = !gameOn;
             }
 
             statsD["SERVER STATUS"] = sOn ? "ON" : "OFF" ;
             setStats( stats, "" );
         }
 
+        //funkcija ki pošilja sporočilo vsem uporabnikima trenuto povazanim
         private void sendToClients( string who, string cmd, string type, string msg ){
-            appendText(log, msg);
-
-            foreach( TcpClient cl in allClients.ToList() ){
+            foreach( TcpClient cl in allClients.ToList() )
                 sendToClient( cl, who, cmd, type, msg );
-            }
         }
 
+        //funkcija ki pošlje sporočilo določenem uporabniku
         private void sendToClient( TcpClient cl, string who, string cmd, string type, string msg ){
             try{
                 NetworkStream cls = cl.GetStream();
 
+                //sporočilo se da v dictionary zato ker odjemalcu ga šaljemo kot json
                 Dictionary<string, string> forJson = new Dictionary<string, string>(){
                     { "sender", who },
                     { "command", cmd },
                     { "type", type },
-                    { "message", msg }
+                    { "message", encrypt( msg, cmd + type ) }
                 };
-
                 string json = JsonConvert.SerializeObject( forJson );
 
                 byte[] send = Encoding.UTF8.GetBytes( json.ToCharArray(), 0, json.Length );
@@ -210,7 +249,7 @@ namespace streznik{
             }
         }
 
-        //tukaj dobimo text z chat boxa kdaj uporabnik pritisne enter
+        //tukaj dobimo besedilo z chat boxa kdaj uporabnik pritisne enter
         private void chat_KeyPress( object sender, KeyPressEventArgs e ){
             if( e.KeyChar == ( char )13 && !string.IsNullOrEmpty( ( sender as TextBox ).Text ) ){
                 string txt = (sender as TextBox).Text;
@@ -226,12 +265,12 @@ namespace streznik{
             }
         }
 
-        //tukaj se preveri ali je uporabnik vnesel pravilen ukaz, in či je nekaj z njim naredimo
+        //tukaj se preveri ali je strežnikov uporabnik vnesel pravilen ukaz, in či je nekaj z njim naredimo
         private string handleInput( string txt ){
             string[] cmd = txt.Split( ' ' );
 
             switch( cmd[0] ){
-                case "disconnect":
+                case "disconnect": //ukaz ki odklopi enega izbranega uporabika
                     if( !sOn )
                         return alert + "Server is not on!";
                     else if( cmd.Length < 4 || ( cmd[1] != "sc" && cmd[1] != "c" ) )
@@ -258,7 +297,7 @@ namespace streznik{
                     }
 
                     return alert + "Unable to find \"" + cmd[2] + "\"!";
-                case "exit":
+                case "exit": //ukaz ki iklopi program, ampak prvo preveri če je strežnik "on" in či je ga izklopi
                     Timer cls = new Timer();
                     cls.Tick += delegate{
                         this.Close();
@@ -267,7 +306,7 @@ namespace streznik{
                     cls.Start();
 
                     return sOn ? handleInput( "stop" ) : "";
-                case "help":
+                case "help": //ukaz ki nam prikaže pomoč
                     return info + "Available commands are:"
                            + "\r\nhelp - shows help"
                            + "\r\ndisconnect [sc/c] [ip:port/nickname] [reason] - disconnects a user from the server"
@@ -280,7 +319,7 @@ namespace streznik{
                            + "\r\nstart - start the server"
                            + "\r\nstop - stop the serve"
                            + "\r\ntoggle - toggle the server state";
-                case "message":
+                case "message": //ukaz zs slanje sporočila eniem odjemalcu ali vsim povezanim
                     if( !sOn )
                         return alert + "Server is not on!";
                     else if( cmd.Length < 3 )
@@ -313,7 +352,7 @@ namespace streznik{
                     }
 
                     return alert + "Unable to find \"" + cmd[1] + "\"!";
-                case "nick":
+                case "nick": //ukaz ki nam dovoli da odjemalcu spremenimo ali dodamo vzdevek
                     if( !sOn )
                         return alert + "Server is not on!";
                     else if( cmd.Length < 3 )
@@ -347,7 +386,7 @@ namespace streznik{
                     sendToClients( "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
 
                     return info + "Changed/gave " + cmd[1] + " the \"" + nick + "\" nickname!";
-                case "port":
+                case "port": //ukaz ki nam dovoli spremembo porta, ampak prvo izklopi strežnik če je "on"
                     if( sOn )
                         appendText( log, handleInput( "stop" ) );
 
@@ -366,7 +405,7 @@ namespace streznik{
                     setStats( stats, "" );
                     listener = new TcpListener( IPAddress.Parse( statsD["IP"] ), Int32.Parse( statsD["PORT"] ) );
                     return info + "Changed port to: " + cmd[1];
-                case "restart":
+                case "restart": //ukaz ki ponovno zažene strežnik
                     if( !sOn )
                         return alert + "Server is not on!";
 
@@ -374,38 +413,39 @@ namespace streznik{
                     appendText( log, handleInput( "start" ) );
 
                     return info + "Server has been restarted.";
-                case "start":
+                case "start": //ukaz ki zažene strežnik
                     if( sOn )
                         return alert + "Server already running!";
                     else
                         serverToggle( sOn );
 
                     return info + "Server started.";
-                case "stop":
+                case "stop": //ukaz ki ustavi strežnik
                     if( !sOn )
                         return alert + "Server already stopped!";
                     else
                         serverToggle( sOn );
 
                     return info + "Server stopped.";
-                case "toggle":
+                case "toggle": //ukaz ki zamenja stanje strežnika
                     return sOn ? handleInput( "stop" ) : handleInput( "start" );
                 default:
                     return alert + "Unknown command: \"" + cmd[0] + "\"! Try help to get all commands.";
             }
         }
 
+        //tukaj obdelavamo z besedilima ki smo jih prejeli od uporabnika
         private void handleMessage( TcpClient origin, Dictionary<string, string> msg, string sender ){
             switch( msg["command"] ){
-                case "message":
+                case "message": //obdelava sporočilo tipa message in ga samo prikaže če je za strežnik, pošlje našrej vsem, ali samo določenem odjemalcu
                     if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( "STREŽNIK" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
-                        appendText( log, "[" + sender + "]\r\n" + ( msg["type"].Equals( "mc" ) ? decrypt( msg["message"], msg["command"] + msg["type"] ) : msg["message"] ) );
-                    else if( msg["recepient"].Equals( "all" ) || msg["recepient"].Equals( "vsi" ) ){
+                        appendText( log, "[" + sender + "]\r\n" + decrypt( msg["message"], msg["command"] + msg["type"] ) );
+                    else if( msg["recepient"].Equals( "all" ) ){
                         foreach( TcpClient cl in allClients.ToList() )
                             if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
                                 sendToClient( cl, sender, msg["command"], msg["type"], msg["message"] );
 
-                        appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + ( msg["type"].Equals( "mca" ) ? decrypt( msg["message"], msg["command"] + msg["type"] ) : msg["message"] ) );
+                        appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + decrypt( msg["message"], msg["command"] + msg["type"] ) );
                     }else{
                         foreach( TcpClient cl in allClients.ToList() )
                             if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
@@ -417,7 +457,7 @@ namespace streznik{
                     }
 
                     break;
-                case "nick":
+                case "nick": //obdelava sporočilo tipa nick in potem spremeni odjemalcu vzdevek
                     aliases[sender] = msg["message"];
                     
                     string[] users = connected.Text.Split( '\n' );
@@ -427,37 +467,41 @@ namespace streznik{
                             setText( connected, string.Join( "\r\n", users ) );
                         }
                     
-                    appendText( log, info + sender + " set their nickname to: \"" + msg["message"] + "\".");
                     sendToClients( "SERVER", "update online", "sc", connected.Text );
-                    sendToClients( sender, "", "ma", sender + " set their nickname to: \"" + msg["message"] + "\"." );
+                    sendToClients( "SERVER", "", "ma", sender + " set their nickname to: \"" + msg["message"] + "\"." );
                     sendToClients( "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
 
                     break;
                 //za nalogu
-                case "čas":
+                case "čas": //obdelava sporočilo tipa čas in vrne odjemalcu trenutni čas
                     appendText( log, info + sender + " je prosil sem da mu povem trenutni čas, pa sem mu povedal: \"" + DateTime.Now + "\".");
                     sendToClient( origin, "SERVER", "", "m", "Trenutni čas je: " + DateTime.Now + "." );
 
                     break;
-                case "dir":
+                case "dir": //obdelava sporočilo tipa dir in vrne odjemalcu trenutni delovni direktorij
                     appendText( log, info + sender + " je vprašal za delovni direktorij, pa sem poslal: \"" + Directory.GetCurrentDirectory().ToString() + "\"." );
                     sendToClient( origin, "SERVER", "", "m", "Delovni direktorij je: " + Directory.GetCurrentDirectory().ToString() );
 
                     break;
-                case "info":
+                case "info": //obdelava sporočilo tipa info in vrne odjemalcu sistemske informacije
                     string sys = "Ime sistema je: \"" + Environment.MachineName + "\" in OS je: \"" + Environment.OSVersion.VersionString.ToString() + "\".";
                     appendText( log, info + sender + " je vprašal za sistemske informacije, pa sem poslal: " + sys);
                     sendToClient( origin, "SERVER", "", "m", sys );
 
                     break;
-                case "pozdravi":
+                case "ponovi": //obdelava sporočilo tipa ponovi in vrne odjemalcu nazaj njegovo sporočilo
+                    appendText( log, info + sender + " je vprašal da mu ponovim nazaj sporočilo: \"" + msg["message"] + "\". Pa sem tudi to naredil." );
+                    sendToClient( origin, "SERVER", "", "m", msg["message"] );
+
+                    break;
+                case "pozdravi": //obdelava sporočilo tipa pozdravi in pozdravi odjemalca
                     appendText( log, info + sender + " je prosil sem da ga pozdravim, pa sem ga pozdravil.");
                     sendToClient( origin, "SERVER", "", "m", "Pozdravljen " + sender + "." );
 
                     break;
-                case "šah":
+                case "šah": //obdelava sporočilo tipa šah in lepo izpiše odjemalcu fen notaciju
                     string[] deli = msg["message"].Split( ' ' );
-                    string[] polja = new string[8];
+                    string[] polja;
                     string fen = "\r\n_ _ _ _ _ _ _ _ \r\n";
 
                     polja = deli[0].Split( '/' );
@@ -486,10 +530,42 @@ namespace streznik{
                     sendToClient( origin, "SERVER", "", "m", "Lepo izpisano FEN stanje: \"" + msg["message"] + "\", zgleda ovak:" + fen );
 
                     break;
-                case "šifriraj":
+                case "šifriraj": //obdelava sporočilo tipa šifriraj in pošlje nazaj odjemalcu šifrirano sporočilo
                     string emsg = encrypt( msg["message"], "šifrirano" + "c" );
                     appendText( log, info + sender + " je prosil da mu šifriram sporočilo: \"" + msg["message"] + "\", pa sem to naredil: \"" + emsg + "\".");
                     sendToClient( origin, "SERVER", "šifrirano", "c", emsg );
+
+                    break;
+                //za drugo nalogu
+                case "startGame":
+                case "stopGame":
+                    gameOn = !gameOn;
+                    sendToClients( "SERVER", "gameStatus", "sc", gameOn.ToString() );
+
+                    if( msg["command"].Equals( "startGame" ) ){
+                        appendText( log, info + sender + " je začel novo igro." );
+                        sendToClients( "SERVER", "", "ma", sender + " je začel novo igro." );
+                        novaBeseda();
+                    }
+                    else{
+                        appendText( log, info + sender + " je končal igro.");
+                        sendToClients( "SERVER", "", "ma", sender + " je končal igro." );
+                        trenutna = "";
+                    }
+
+
+                    break;
+                case "zadeni": //obdelava sporočilo tipa zadeni ki preveri če je uporabnik zadenil besedilo
+                    if( msg["message"].Equals( trenutna ) ){
+                        sendToClients( "SERVER", "", "ma", sender + " je uganul zagonetno besedo: \"" + msg["message"] + "\"." );
+                        appendText( log, info + sender + " je uganul zagonetno besedo (" + msg["message"] + "==" + trenutna + ")!" );
+                        statsG[sender]++;
+                        novaBeseda();
+                        break;
+                    }
+                    
+                    appendText( log, info + sender + " ni uganul zagonetno besedo (" + msg["message"] + "!=" + trenutna + ")!" );
+                    sendToClients( "SERVER", "", "ma", sender + " je poskusil uganit zagonetno besedo: \"" + msg["message"] + "\", pa mu ni uspelo." );
 
                     break;
                 default:
@@ -497,6 +573,20 @@ namespace streznik{
             }
         }
 
+        private void novaBeseda(){
+            Random rnd = new Random();
+            trenutna = besede.ElementAt( rnd.Next( 0, besede.Count ) ).Key;
+
+            appendText(log, statsG.Count.ToString());
+            if( statsG.Count == 0 )
+                foreach( TcpClient cl in allClients.ToList() )
+                    statsG[cl.Client.RemoteEndPoint.ToString()] = 0;
+
+            appendText( log, info + "Nova beseda je izbrana \"" + trenutna + "\", namig je: \"" + besede[trenutna] + "\"." );
+            sendToClients( "SERVER", "", "ma", "Nova beseda je izbrana, namig: \"" + besede[trenutna] + "\"." );
+        }
+
+        //funkcija ki šifrira besedilo z ključem ki ga pošljemo
         private string encrypt( string txt, string key ){
             byte[] Bkey = new byte[16];
             for( int i = 0; i < 16; i += 2 ){
@@ -504,10 +594,11 @@ namespace streznik{
                 Array.Copy( B, 0, Bkey, i, 2 );
             }
 
-            TripleDESCryptoServiceProvider edes = new TripleDESCryptoServiceProvider();
-            edes.Key = Bkey;
-            edes.Mode = CipherMode.ECB;
-            edes.Padding = PaddingMode.PKCS7;
+            TripleDESCryptoServiceProvider edes = new TripleDESCryptoServiceProvider{
+                Key = Bkey,
+                Mode = CipherMode.ECB,
+                Padding = PaddingMode.PKCS7
+            };
 
             ICryptoTransform encrypt = edes.CreateEncryptor();
             byte[] byteTXT = UTF8Encoding.UTF8.GetBytes( txt );
@@ -517,6 +608,7 @@ namespace streznik{
             return Convert.ToBase64String( result, 0, result.Length );
         }
 
+        //funkcija ki dešefrira besedilo
         private string decrypt( string msg, string key){
             byte[] Bkey = new byte[16];
             for( int i = 0; i < 16; i += 2 ){
@@ -524,10 +616,11 @@ namespace streznik{
                 Array.Copy( B, 0, Bkey, i, 2 );
             }
 
-            TripleDESCryptoServiceProvider ddes = new TripleDESCryptoServiceProvider();
-            ddes.Key = Bkey;
-            ddes.Mode = CipherMode.ECB;
-            ddes.Padding = PaddingMode.PKCS7;
+            TripleDESCryptoServiceProvider ddes = new TripleDESCryptoServiceProvider{
+                Key = Bkey,
+                Mode = CipherMode.ECB,
+                Padding = PaddingMode.PKCS7
+            };
 
             ICryptoTransform decrypt = ddes.CreateDecryptor();
             byte[] byteTXT = Convert.FromBase64String( msg );
