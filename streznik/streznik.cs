@@ -138,12 +138,12 @@ namespace streznik{
                 statsG[cn] = 0;
             setStats( stats, "" );
 
-            sendToClient( client, "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
-            sendToClient( client, "SERVER", "gameStatus", "sc", gameOn.ToString() );
-            sendToClients( "SERVER", "update online", "sc", connected.Text );
-
             //sporočilo da se je nov odjemalec povezal
             sendToClients( "SERVER", "", "ma", cn + " se je povezal na strežnik!" );
+
+            sendToClient( client, "SERVER", "gameStatus", "sc", gameOn.ToString() );
+            sendToClient( client, "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
+            sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
         //funkcija ki se kliče kdaj je uporabnik povezan
@@ -153,10 +153,13 @@ namespace streznik{
                 string read = "";
                 try{
                     read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
-                }catch{}
+                }catch{
+                    appendText( log, error + "Couldn't read message!" );
+                }
 
-                if( !string.IsNullOrEmpty( read ) ){
+                 if( !string.IsNullOrEmpty( read ) ){
                     Dictionary<string, string> msg = JsonConvert.DeserializeObject<Dictionary<string, string>>( @read ); //sporočilo prejeto od uporabnika, ki se šalje kot json, se nazaj da v obliko dictioanry
+                    msg["message"] = decrypt( msg["message"], msg["command"] + msg["type"] + statsD["IP"] + ":" + statsD["PORT"] );
 
                     handleMessage( cl, msg, cn );
                 }
@@ -238,14 +241,14 @@ namespace streznik{
                     { "sender", who },
                     { "command", cmd },
                     { "type", type },
-                    { "message", encrypt( msg, cmd + type ) }
+                    { "message", encrypt( msg, cmd + type + statsD["IP"] + ":" + statsD["PORT"] ) }
                 };
                 string json = JsonConvert.SerializeObject( forJson );
 
                 byte[] send = Encoding.UTF8.GetBytes( json.ToCharArray(), 0, json.Length );
                 cls.Write( send, 0, send.Length );
             }catch{
-                appendText( log, "Unable to execute: " + cmd + ". Client not responding!" );
+                appendText( log, "Unable to execute: " + cmd + " - " + type + " - " + msg + ". Client not responding!" );
             }
         }
 
@@ -437,15 +440,15 @@ namespace streznik{
         //tukaj obdelavamo z besedilima ki smo jih prejeli od uporabnika
         private void handleMessage( TcpClient origin, Dictionary<string, string> msg, string sender ){
             switch( msg["command"] ){
-                case "message": //obdelava sporočilo tipa message in ga samo prikaže če je za strežnik, pošlje našrej vsem, ali samo določenem odjemalcu
+                case "msg": //obdelava sporočilo tipa message in ga samo prikaže če je za strežnik, pošlje našrej vsem, ali samo določenem odjemalcu
                     if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( "STREŽNIK" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
-                        appendText( log, "[" + sender + "]\r\n" + decrypt( msg["message"], msg["command"] + msg["type"] ) );
+                        appendText( log, "[" + sender + "]\r\n" +  msg["message"] );
                     else if( msg["recepient"].Equals( "all" ) ){
                         foreach( TcpClient cl in allClients.ToList() )
                             if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
                                 sendToClient( cl, sender, msg["command"], msg["type"], msg["message"] );
 
-                        appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + decrypt( msg["message"], msg["command"] + msg["type"] ) );
+                        appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
                     }else{
                         foreach( TcpClient cl in allClients.ToList() )
                             if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
@@ -609,7 +612,7 @@ namespace streznik{
         }
 
         //funkcija ki dešefrira besedilo
-        private string decrypt( string msg, string key){
+        private string decrypt( string msg, string key ){
             byte[] Bkey = new byte[16];
             for( int i = 0; i < 16; i += 2 ){
                 byte[] B = BitConverter.GetBytes( key[i % key.Length] );
