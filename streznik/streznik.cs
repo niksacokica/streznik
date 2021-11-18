@@ -55,7 +55,7 @@ namespace streznik{
 
             setStats( stats, "" );
 
-            //timer ki vsako sekundo preveri ali se je slučajno kateri odjemalec odpspojil na način da ni poslal sporočila da se je odpojil (interneta je zmanjkalo,...)
+            //timer ki vsako sekundo preveri ali se je slučajno kateri odjemalec odpspojil na način da ni poslal sporočila da se je odspojil (interneta je zmanjkalo,...)
             Timer cc = new Timer();
             cc.Tick += delegate {
                 foreach( TcpClient cl in allClients.ToList() ){
@@ -141,20 +141,21 @@ namespace streznik{
             //sporočilo da se je nov odjemalec povezal
             sendToClients( "SERVER", "", "ma", cn + " se je povezal na strežnik!" );
 
+            sendToClients( "SERVER", "update online", "sc", connected.Text );
             sendToClient( client, "SERVER", "gameStatus", "sc", gameOn.ToString() );
             sendToClient( client, "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
-            sendToClients( "SERVER", "update online", "sc", connected.Text );
         }
 
         //funkcija ki se kliče kdaj je uporabnik povezan
         private void onClientConnected( TcpClient cl, NetworkStream ns, string cn ){
-            while( sOn ){
+            while( sOn && cl.Connected ){
                 byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
                 string read = "";
                 try{
                     read = Encoding.UTF8.GetString( buffer, 0, ns.Read( buffer, 0, buffer.Length ) );
                 }catch{
-                    appendText( log, error + "Couldn't read message!" );
+                    if( cl.Connected )
+                        appendText( log, error + "Couldn't read message!" );
                 }
 
                  if( !string.IsNullOrEmpty( read ) ){
@@ -169,11 +170,11 @@ namespace streznik{
         //funkcija ki se kliče kdaj se uporabnik odspoji
         private void onClientDisconnect( TcpClient client, string cn ){
             allClients.Remove( client );
-            aliases.Remove( cn );
 
             if( sOn )
-                appendText( log, info + cn + " has disconnected." );
+                appendText( log, info + cn + ( !string.IsNullOrEmpty( aliases[cn] ) ? " (" + aliases[cn] + ")" : "" ) + " has disconnected." );
             removeText( connected, cn );
+            aliases.Remove( cn );
 
             statsD["CONNECTED CLIENTS"] = ( Math.Max( Int32.Parse( statsD["CONNECTED CLIENTS"] ) - 1, 0 ) ).ToString();
             statsG.Remove( cn );
@@ -345,7 +346,7 @@ namespace streznik{
                         else
                             return alert + "Couldn't find nickname/ip: \"" + cmd[1] + "\"!";
 
-                        foreach( TcpClient cl in allClients.ToList()){
+                        foreach( TcpClient cl in allClients.ToList() ){
                             if( rec.Equals( cl.Client.RemoteEndPoint.ToString() ) ) {
                                 sendToClient( cl, "SERVER", "", "m", msg );
 
@@ -442,19 +443,19 @@ namespace streznik{
             switch( msg["command"] ){
                 case "msg": //obdelava sporočilo tipa message in ga samo prikaže če je za strežnik, pošlje našrej vsem, ali samo določenem odjemalcu
                     if( msg["recepient"].Equals( "SERVER" ) || msg["recepient"].Equals( "STREŽNIK" ) || msg["recepient"].Equals( statsD["IP"] + ":" + statsD["PORT"] ) )
-                        appendText( log, "[" + sender + "]\r\n" +  msg["message"] );
+                        appendText( log, "[" + sender + "]" + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")\r\n" : "\r\n") + msg["message"] );
                     else if( msg["recepient"].Equals( "all" ) ){
                         foreach( TcpClient cl in allClients.ToList() )
                             if( !sender.Equals( cl.Client.RemoteEndPoint.ToString() ) )
                                 sendToClient( cl, sender, msg["command"], msg["type"], msg["message"] );
 
-                        appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
+                        appendText( log, "[" + sender + "]" + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " -> [all]" + "\r\n" + msg["message"] );
                     }else{
                         foreach( TcpClient cl in allClients.ToList() )
                             if( msg["recepient"].Equals( cl.Client.RemoteEndPoint.ToString() ) ){
                                 sendToClient( cl, sender, msg["command"], msg["type"], msg["message"] );
 
-                                appendText( log, "[" + sender + "] -> [" + msg["recepient"] + "]\r\n" + msg["message"] );
+                                appendText( log, "[" + sender + "]" + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " -> [" + msg["recepient"] + "]" + ( !string.IsNullOrEmpty( aliases[msg["recepient"]] ) ? " (" + aliases[msg["recepient"]] + ")\r\n" : "\r\n" ) + msg["message"] );
                                 break;
                             }
                     }
@@ -477,29 +478,29 @@ namespace streznik{
                     break;
                 //za nalogu
                 case "čas": //obdelava sporočilo tipa čas in vrne odjemalcu trenutni čas
-                    appendText( log, info + sender + " je prosil sem da mu povem trenutni čas, pa sem mu povedal: \"" + DateTime.Now + "\".");
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je prosil sem da mu povem trenutni čas, pa sem mu povedal: \"" + DateTime.Now + "\".");
                     sendToClient( origin, "SERVER", "", "m", "Trenutni čas je: " + DateTime.Now + "." );
 
                     break;
                 case "dir": //obdelava sporočilo tipa dir in vrne odjemalcu trenutni delovni direktorij
-                    appendText( log, info + sender + " je vprašal za delovni direktorij, pa sem poslal: \"" + Directory.GetCurrentDirectory().ToString() + "\"." );
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je vprašal za delovni direktorij, pa sem poslal: \"" + Directory.GetCurrentDirectory().ToString() + "\"." );
                     sendToClient( origin, "SERVER", "", "m", "Delovni direktorij je: " + Directory.GetCurrentDirectory().ToString() );
 
                     break;
                 case "info": //obdelava sporočilo tipa info in vrne odjemalcu sistemske informacije
                     string sys = "Ime sistema je: \"" + Environment.MachineName + "\" in OS je: \"" + Environment.OSVersion.VersionString.ToString() + "\".";
-                    appendText( log, info + sender + " je vprašal za sistemske informacije, pa sem poslal: " + sys);
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je vprašal za sistemske informacije, pa sem poslal: " + sys);
                     sendToClient( origin, "SERVER", "", "m", sys );
 
                     break;
                 case "ponovi": //obdelava sporočilo tipa ponovi in vrne odjemalcu nazaj njegovo sporočilo
-                    appendText( log, info + sender + " je vprašal da mu ponovim nazaj sporočilo: \"" + msg["message"] + "\". Pa sem tudi to naredil." );
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je vprašal da mu ponovim nazaj sporočilo: \"" + msg["message"] + "\". Pa sem tudi to naredil." );
                     sendToClient( origin, "SERVER", "", "m", msg["message"] );
 
                     break;
                 case "pozdravi": //obdelava sporočilo tipa pozdravi in pozdravi odjemalca
-                    appendText( log, info + sender + " je prosil sem da ga pozdravim, pa sem ga pozdravil.");
-                    sendToClient( origin, "SERVER", "", "m", "Pozdravljen " + sender + "." );
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je prosil sem da ga pozdravim, pa sem ga pozdravil.");
+                    sendToClient( origin, "SERVER", "", "m", "Pozdravljen " + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + "." );
 
                     break;
                 case "šah": //obdelava sporočilo tipa šah in lepo izpiše odjemalcu fen notaciju
@@ -529,46 +530,53 @@ namespace streznik{
 
                     fen += "\r\n Številka trenutne poteze: " + deli[5];
 
-                    appendText( log, info + sender + " je prosil da mu lepo izpišem FEN stanje: \"" + msg["message"] + "\". Pa sem mu poslal:" + fen );
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je prosil da mu lepo izpišem FEN stanje: \"" + msg["message"] + "\". Pa sem mu poslal:" + fen );
                     sendToClient( origin, "SERVER", "", "m", "Lepo izpisano FEN stanje: \"" + msg["message"] + "\", zgleda ovak:" + fen );
 
                     break;
                 case "šifriraj": //obdelava sporočilo tipa šifriraj in pošlje nazaj odjemalcu šifrirano sporočilo
                     string emsg = encrypt( msg["message"], "šifrirano" + "c" );
-                    appendText( log, info + sender + " je prosil da mu šifriram sporočilo: \"" + msg["message"] + "\", pa sem to naredil: \"" + emsg + "\".");
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je prosil da mu šifriram sporočilo: \"" + msg["message"] + "\", pa sem to naredil: \"" + emsg + "\".");
                     sendToClient( origin, "SERVER", "šifrirano", "c", emsg );
 
                     break;
                 //za drugo nalogu
                 case "startGame":
-                case "stopGame":
+                case "stopGame": //obdelava sporočilo tipa startGame/stopGame ki ali začne ali konča igro
                     gameOn = !gameOn;
                     sendToClients( "SERVER", "gameStatus", "sc", gameOn.ToString() );
 
                     if( msg["command"].Equals( "startGame" ) ){
-                        appendText( log, info + sender + " je začel novo igro." );
-                        sendToClients( "SERVER", "", "ma", sender + " je začel novo igro." );
+                        appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je začel novo igro." );
+                        sendToClients( "SERVER", "", "ma", sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je začel novo igro." );
                         novaBeseda();
                     }
                     else{
-                        appendText( log, info + sender + " je končal igro.");
-                        sendToClients( "SERVER", "", "ma", sender + " je končal igro." );
+                        appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je končal igro.");
+                        sendToClients( "SERVER", "", "ma", sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je končal igro." );
                         trenutna = "";
+                        
+                        string stanje = "Trenutni rezultati igre:\r\n" + string.Join( "\r\n", statsG.Select( kvp => kvp.Key + ( !string.IsNullOrEmpty( aliases[kvp.Key] ) ? " (" + aliases[kvp.Key] + "): " : ": " ) + kvp.Value ) );
+                        appendText( log, info + stanje );
+                        sendToClients( "SERVER", "", "ma", stanje );
                     }
 
 
                     break;
                 case "zadeni": //obdelava sporočilo tipa zadeni ki preveri če je uporabnik zadenil besedilo
                     if( msg["message"].Equals( trenutna ) ){
-                        sendToClients( "SERVER", "", "ma", sender + " je uganul zagonetno besedo: \"" + msg["message"] + "\"." );
-                        appendText( log, info + sender + " je uganul zagonetno besedo (" + msg["message"] + "==" + trenutna + ")!" );
+                        sendToClients( "SERVER", "", "ma", sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? "(" + aliases[sender] + ")" : "" ) + " je uganul zagonetno besedo: \"" + msg["message"] + "\"." );
+                        appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je uganul zagonetno besedo (" + msg["message"] + " == " + trenutna + ")!" );
+                        
                         statsG[sender]++;
+                        statsG = ( from val in statsG orderby val.Value descending select val ).ToDictionary( key => key.Key, val => val.Value );
+
                         novaBeseda();
                         break;
                     }
                     
-                    appendText( log, info + sender + " ni uganul zagonetno besedo (" + msg["message"] + "!=" + trenutna + ")!" );
-                    sendToClients( "SERVER", "", "ma", sender + " je poskusil uganit zagonetno besedo: \"" + msg["message"] + "\", pa mu ni uspelo." );
+                    appendText( log, info + sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " ni uganul zagonetno besedo (" + msg["message"] + " != " + trenutna + ")!" );
+                    sendToClients( "SERVER", "", "ma", sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je poskusil uganit zagonetno besedo: \"" + msg["message"] + "\", pa mu ni uspelo." );
 
                     break;
                 default:
@@ -576,17 +584,21 @@ namespace streznik{
             }
         }
 
-        private void novaBeseda(){
+        private void novaBeseda(){ //funkcija ki poda novo besedo za igro
             Random rnd = new Random();
             trenutna = besede.ElementAt( rnd.Next( 0, besede.Count ) ).Key;
 
-            appendText(log, statsG.Count.ToString());
             if( statsG.Count == 0 )
                 foreach( TcpClient cl in allClients.ToList() )
                     statsG[cl.Client.RemoteEndPoint.ToString()] = 0;
 
+            string stanje = "Trenutni rezultati igre:\r\n" + string.Join( "\r\n", statsG.Select( kvp => kvp.Key + ( !string.IsNullOrEmpty( aliases[kvp.Key] ) ? " (" + aliases[kvp.Key] + "): " : ": " ) + kvp.Value ) );
+
             appendText( log, info + "Nova beseda je izbrana \"" + trenutna + "\", namig je: \"" + besede[trenutna] + "\"." );
             sendToClients( "SERVER", "", "ma", "Nova beseda je izbrana, namig: \"" + besede[trenutna] + "\"." );
+
+            appendText( log, info + stanje );
+            sendToClients( "SERVER", "", "ma", stanje );
         }
 
         //funkcija ki šifrira besedilo z ključem ki ga pošljemo
