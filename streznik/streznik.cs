@@ -127,27 +127,26 @@ namespace streznik{
 
         //funkcija ki se kliče kdaj se uporabnik poveže
         private void onClientConnect( TcpClient client, string cn ){
-            allClients.Add( client );
+            sendToClients("SERVER", "", "ma", cn + " se je povezal na strežnik!"); //sporočilo da se je nov odjemalec povezal
             aliases.Add( cn, "" );
 
+            allClients.Add( client );
             appendText( log, info + cn + " has connected." );
             appendText( connected, cn );
-
+            
             statsD["CONNECTED CLIENTS"] = ( Int32.Parse( statsD["CONNECTED CLIENTS"] ) + 1 ).ToString();
-            if( gameOn )
-                statsG[cn] = 0;
             setStats( stats, "" );
 
-            //sporočilo da se je nov odjemalec povezal
-            sendToClients( "SERVER", "", "ma", cn + " se je povezal na strežnik!" );
-
-            sendToClients( "SERVER", "update online", "sc", connected.Text );
-            sendToClient( client, "SERVER", "gameStatus", "sc", gameOn.ToString() );
+            if( gameOn )
+                statsG[cn] = 0;
             sendToClient( client, "SERVER", "aliases", "sc", JsonConvert.SerializeObject( aliases ) );
+            sendToClient( client, "SERVER", "gameStatus", "sc", gameOn.ToString() );
         }
 
         //funkcija ki se kliče kdaj je uporabnik povezan
         private void onClientConnected( TcpClient cl, NetworkStream ns, string cn ){
+            sendToClients( "SERVER", "update online", "sc", connected.Text );
+
             while( sOn && cl.Connected ){
                 byte[] buffer = new byte[Int32.Parse( statsD["MESSAGE SIZE"] )];
                 string read = "";
@@ -556,7 +555,7 @@ namespace streznik{
                         sendToClients( "SERVER", "", "ma", sender + ( !string.IsNullOrEmpty( aliases[sender] ) ? " (" + aliases[sender] + ")" : "" ) + " je končal igro." );
                         trenutna = "";
                         
-                        string stanje = "Trenutni rezultati igre:\r\n" + string.Join( "\r\n", statsG.Select( kvp => kvp.Key + ( !string.IsNullOrEmpty( aliases[kvp.Key] ) ? " (" + aliases[kvp.Key] + "): " : ": " ) + kvp.Value ) );
+                        string stanje = "Končni rezultati igre:\r\n" + string.Join( "\r\n", statsG.Select( kvp => kvp.Key + ( !string.IsNullOrEmpty( aliases[kvp.Key] ) ? " (" + aliases[kvp.Key] + "): " : ": " ) + kvp.Value ) );
                         appendText( log, info + stanje );
                         sendToClients( "SERVER", "", "ma", stanje );
                     }
